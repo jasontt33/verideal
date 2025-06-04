@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+  <style>
+    :root { --blue:#006BFF; }
+    .container { color:var(--blue); max-width: 600px; margin: auto; }
+    h2 { text-align:center; margin-bottom:1rem; }
+    label { font-weight:600; }
+    .form-control { border:1px solid var(--blue); color:var(--blue); }
+    .form-control:focus { border-color:var(--blue); box-shadow:0 0 5px rgba(0,107,255,.5); }
+    .btn-primary { background-color:var(--blue); border-color:var(--blue); color:#fff; }
+    .btn-primary:hover { background-color:#0056cc; border-color:#0056cc; }
+    .error { color: #d9534f; font-size: 0.9em; }
+  </style>
+
+  <div class="container">
+    <h2>Create a New Deal</h2>
+
+    {# Flash messages (success / danger) #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="alert alert-{{ category }} mt-2">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="post" action="{{ url_for('new_deal') }}">
+      {{ form.hidden_tag() }}
+
+      <div class="form-group">
+        {{ form.customer_email.label(class="control-label") }}
+        {{ form.customer_email(class="form-control") }}
+        {% if form.customer_email.errors %}
+          <div class="error">{{ form.customer_email.errors[0] }}</div>
+        {% endif %}
+      </div>
+
+      <div class="form-group">
+        {{ form.customer_website.label(class="control-label") }}
+        {{ form.customer_website(class="form-control") }}
+        {% if form.customer_website.errors %}
+          <div class="error">{{ form.customer_website.errors[0] }}</div>
+        {% endif %}
+      </div>
+
+      <div class="form-row">
+        <div class="form-group col-md-6">
+          {{ form.deal_value.label(class="control-label") }}
+          {{ form.deal_value(class="form-control") }}
+          {% if form.deal_value.errors %}
+            <div class="error">{{ form.deal_value.errors[0] }}</div>
+          {% endif %}
+        </div>
+        <div class="form-group col-md-6">
+          {{ form.arr.label(class="control-label") }}
+          {{ form.arr(class="form-control") }}
+          {% if form.arr.errors %}
+            <div class="error">{{ form.arr.errors[0] }}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="form-group">
+        {{ form.product_sold.label(class="control-label") }}
+        {{ form.product_sold(class="form-control") }}
+        {% if form.product_sold.errors %}
+          <div class="error">{{ form.product_sold.errors[0] }}</div>
+        {% endif %}
+      </div>
+
+      <div class="form-group">
+        {{ form.description.label(class="control-label") }}
+        {{ form.description(class="form-control", rows=4) }}
+        {% if form.description.errors %}
+          <div class="error">{{ form.description.errors[0] }}</div>
+        {% endif %}
+      </div>
+
+      <div class="form-row">
+        <div class="form-group col-md-6">
+          {{ form.deal_cycle_length.label(class="control-label") }}
+          {{ form.deal_cycle_length(class="form-control") }}
+          {% if form.deal_cycle_length.errors %}
+            <div class="error">{{ form.deal_cycle_length.errors[0] }}</div>
+          {% endif %}
+        </div>
+        <div class="form-group col-md-6">
+          {{ form.rate_me.label(class="control-label") }}
+          {{ form.rate_me(class="form-control") }}
+          {% if form.rate_me.errors %}
+            <div class="error">{{ form.rate_me.errors[0] }}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      {{ form.submit(class="btn btn-primary") }}
+    </form>
+  </div>
+{% endblock %}

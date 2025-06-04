@@ -1,0 +1,38 @@
+# remove the obsolete version line
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER:     verideal_user
+      POSTGRES_PASSWORD: "Verideal123!!"
+      POSTGRES_DB:       verideal
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db.sql:/docker-entrypoint-initdb.d/db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  app:
+    build: .
+    depends_on:            # simple form is fine in v3+
+      - db
+    environment:
+      DATABASE_URL: "postgresql://verideal_user:Verideal123!!@db:5432/verideal"
+      POSTGRES_USER: verideal_user          # for the wait loop
+    entrypoint: >
+      sh -c '
+        until pg_isready -h db -U "$POSTGRES_USER" -d verideal; do
+          echo "Waiting for Postgres…"
+          sleep 2
+        done
+        exec gunicorn -b 0.0.0.0:5000 main:app
+      '
+    ports:
+      - "5050:5000"
+
+volumes:
+  db-data:
