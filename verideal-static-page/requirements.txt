@@ -1,0 +1,7 @@
+## Flask app
+Flask
+gunicorn
+requests
+python-dotenv
+Werkzeug
+boto3

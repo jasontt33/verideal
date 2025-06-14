@@ -53,6 +53,8 @@ CREATE TABLE deals (
   verified_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   display_verified_at  BOOLEAN      NOT NULL DEFAULT FALSE,
   display_verified_by  BOOLEAN      NOT NULL DEFAULT FALSE,
+  sales_trainer        VARCHAR(255) NOT NULL,
+  sales_manager        VARCHAR(255) NOT NULL,
   created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   closed_at            TIMESTAMPTZ,
