@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VeriDeal</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    /* 2. Base font-size (optional) for rem sizing */
+    html {
+      font-size: 16px;
+    }
+    body {
+      margin: 0;
+      font-family: 'Roboto', sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg,  #6B73FF 0%, #000DFF 100%);
+      color: #fff;
+    }
+    .container {
+      width: 90%;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 1.5rem;
+
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+      
+      /* new: flex centering */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      /* justify-content: center;  uncomment if you want vertical centering too */
+    }
+
+    /* 4. Ensure images and form elements fill the container */
+    .container img {
+      width: 100%;           /* fluid images */
+      height: auto;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+
+    .form-group label,
+    .form-group input {
+      display: block;
+      width: 100%;
+    }
+    .container h1 {
+      margin-bottom: 1rem;
+      font-size: 2rem;
+      font-weight: 700;
+    }
+    .container p {
+      font-size: 1rem;
+      margin-bottom: 2rem;
+    }
+    /* form styles */
+    .form-group {
+      margin-bottom: 1rem;
+      text-align: left;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.9rem;
+      margin-bottom: 0.25rem;
+    }
+    .form-group input {
+      padding: 0.5rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+    }
+
+    /* 5. Full-width button on small screens */
+    @media (max-width: 480px) {
+      .btn {
+        width: 100%;
+        text-align: center;
+      }
+    }
+    .btn {
+      /* display: inline-block; */
+      padding: 0.75rem 1.5rem;
+      border: 2px solid #fff;
+      border-radius: 50px;
+      text-decoration: none;
+      display: block;
+      margin: 1rem auto 0;  /* top-spacing, then auto left/right to center */
+      color: #1E3A8A;
+      font-weight: 700;
+      transition: background 0.3s, color 0.3s;
+      cursor: pointer;
+      background: transparent;
+    }
+    .btn:hover {
+      background: #fff;
+      color: #000;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img src="{{ url_for('static', filename='images/verideal.png') }}" alt="Hero Image">
+    <p>Some text here</p>
+    <form action="/submit" method="post">
+      <div class="form-group">
+        <label for="first_name">First Name</label>
+        <input id="first_name" name="first_name" type="text" placeholder="Enter your first name" required>
+      </div>
+      <div class="form-group">
+        <label for="last_name">Last Name</label>
+        <input id="last_name" name="last_name" type="text" placeholder="Enter your last name" required>
+      </div>
+      <div class="form-group">
+        <label for="email">Email Address</label>
+        <input id="email" name="email" type="email" placeholder="Enter your email" required>
+      </div>
+      <button type="submit" class="btn">Submit</button>
+      <div id="color-wheel-container" style="margin-bottom:1.5rem;"></div>
+    </form>
+
+  </div>
+</body>
+</html>

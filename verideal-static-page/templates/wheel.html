@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Native Color Picker</title>
+  <style>
+    body {
+      transition: background-color 0.3s ease;
+    }
+    .picker-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: 2rem;
+    }
+    label {
+      margin-bottom: 0.5rem;
+      font-family: sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div class="picker-container">
+    <label for="bgPicker">Choose Background Color:</label>
+    <input type="color" id="bgPicker" value="#ffffff">
+  </div>
+
+  <script>
+    const picker = document.getElementById('bgPicker');
+    picker.addEventListener('input', e => {
+      document.body.style.backgroundColor = e.target.value;
+    });
+  </script>
+</body>
+</html>

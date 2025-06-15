@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">  
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>500 – Something Went Wrong</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    /* Reset & box-sizing */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Roboto', sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #a5aaef 0%, #5d65ef 100%);
+      color: #fff;
+      text-align: center;
+      padding: 1rem;
+    }
+
+    .error-page {
+      max-width: 400px;
+      width: 90%;
+      background: rgba(255,255,255,0.1);
+      backdrop-filter: blur(8px);
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 8px 32px rgba(127,134,245,0.37);
+    }
+
+    .error-page h1 {
+      font-size: 4rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .error-page h2 {
+      font-size: 1.5rem;
+      font-weight: 400;
+      margin-bottom: 1rem;
+    }
+
+    .error-page p {
+      font-size: 1rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.4;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.5rem;
+      border: 2px solid #fff;
+      border-radius: 50px;
+      text-decoration: none;
+      color: #1E3A8A;
+      font-weight: 700;
+      background: #fff;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    .btn:hover {
+      background: transparent;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="error-page">
+    <h1>500</h1>
+    <h2>Whoops! 😔</h2>
+    <p>
+      Something went wrong on our end.<br>
+      Our team has been notified and is on it.
+      <br><br>
+      Please try refreshing the page, or come back in a bit.
+    </p>
+    <a href="/" class="btn">Return Home</a>
+  </div>
+</body>
+</html>
