@@ -10,4 +10,7 @@ WORKDIR /app
 COPY . /app
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Expose the port the app runs on
+EXPOSE 5000
+
 CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]
