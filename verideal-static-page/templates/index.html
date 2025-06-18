@@ -1,149 +1,163 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriDeal</title>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&family=Montserrat:wght@600&display=swap"
+    rel="stylesheet"
+  />
   <style>
-    *,
-    *::before,
-    *::after {
-      box-sizing: border-box;
+    :root {
+      --primary: #6366f1;
+      --primary-dark: #4f46e5;
+      --accent: #fbbf24;
+      --bg: #f3f4f6;
+      --white: #fff;
+      --text-dark: #22223b;
     }
-
-    /* 2. Base font-size (optional) for rem sizing */
-    html {
-      font-size: 16px;
+    * {
+      box-sizing: border-box;
     }
     body {
       margin: 0;
       font-family: 'Roboto', sans-serif;
-      display: flex;
-      justify-content: center;
-      align-items: center;
+      background: var(--bg);
+      color: var(--text-dark);
       min-height: 100vh;
-      background: linear-gradient(135deg,  #9396dc 0%, #6469ce 100%);
-      color: #fff;
-    }
-    .container {
-      width: 90%;
-      max-width: 500px;
-      margin: 0 auto;
-      padding: 1.5rem;
-
-      background: rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 12px;
-      box-shadow: 0 8px 32px 0 rgba(94, 98, 154, 0.37);
-      
-      /* new: flex centering */
       display: flex;
-      flex-direction: column;
       align-items: center;
-      /* justify-content: center;  uncomment if you want vertical centering too */
+      justify-content: center;
+      padding: 2rem;
     }
-
-    /* 4. Ensure images and form elements fill the container */
-    .container img {
-      width: 100%;           /* fluid images */
-      height: auto;
-      border-radius: 8px;
-      margin-bottom: 1.5rem;
-    }
-
-    .form-group label,
-    .form-group input {
-      display: block;
+    .wrapper {
+      display: flex;
+      background: var(--white);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
+      overflow: hidden;
+      max-width: 1200px;
       width: 100%;
     }
-    .container h1 {
-      margin-bottom: 1rem;
-      font-size: 2rem;
-      font-weight: 700;
+    .content {
+      flex: 1;
+      padding: 3rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
-    .container p {
-      font-size: 1rem;
+    .content h1 {
+      font-family: 'Montserrat', sans-serif;
+      font-size: 2.5rem;
+      color: var(--primary-dark);
+      margin: 0 0 1rem;
+    }
+    .content p {
+      font-size: 1.1rem;
+      line-height: 1.6;
       margin-bottom: 2rem;
+      color: #4a4a6a;
     }
-    /* form styles */
     .form-group {
-      margin-bottom: 1rem;
-      text-align: left;
+      margin-bottom: 1.2rem;
     }
     .form-group label {
       display: block;
-      font-size: 0.9rem;
-      margin-bottom: 0.25rem;
+      margin-bottom: 0.4rem;
+      font-weight: 600;
     }
-    .form-group input {
-      padding: 0.5rem;
-      border: none;
-      border-radius: 6px;
+    .form-group input,
+    .form-group textarea {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
       font-size: 1rem;
+      transition: border-color 0.2s;
     }
-
-    /* 5. Full-width button on small screens */
-    @media (max-width: 480px) {
-      .btn {
-        width: 100%;
-        text-align: center;
-      }
+    .form-group input:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--primary);
     }
-    .btn {
-      /* display: inline-block; */
-      padding: 0.75rem 1.5rem;
-      border: 2px solid #fff;
-      border-radius: 50px;
-      text-decoration: none;
-      display: block;
-      margin: 1rem auto 0;  /* top-spacing, then auto left/right to center */
-      color: #1E3A8A;
+    .btn-submit {
+      background: var(--primary);
+      color: var(--white);
+      padding: 0.85rem 1.5rem;
+      font-size: 1rem;
       font-weight: 700;
-      transition: background 0.3s, color 0.3s;
+      border: none;
+      border-radius: 8px;
       cursor: pointer;
-      background: transparent;
+      align-self: flex-start;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+      transition: background 0.2s, transform 0.1s;
     }
-    .btn:hover {
-      background: #fff;
-      color: #000;
+    .btn-submit:hover {
+      background: var(--primary-dark);
+      transform: translateY(-2px);
+    }
+    .image-side {
+      flex: 1;
+      background: linear-gradient(120deg, var(--primary) 0%, var(--primary-dark) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .image-side img {
+      max-width: 100%;
+      max-height: 80vh;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    }
+    @media (max-width: 900px) {
+      .wrapper {
+        flex-direction: column;
+      }
+      .image-side {
+        padding: 1.5rem;
+      }
+      .content {
+        padding: 2rem;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <img src="{{ url_for('static', filename='images/verideal.png') }}" alt="Hero Image">
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul class="flashes" style="list-style:none;padding:0;margin-bottom:1rem;">
-          {% for message in messages %}
-            <li style="background:rgba(255,255,255,0.8);color:#1E3A8A;padding:0.75rem 1rem;border-radius:6px;margin-bottom:0.5rem;text-align:center;">
-              {{ message }}
-            </li>
-          {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
-    <p>Some text here</p>
-    <img src="{{ url_for('static', filename='images/stripe.png') }}" alt="Stripe Logo" style="width:120px; height:auto; display:block; margin-bottom:1rem;">
-
-    <form action="/submit" method="post">
-      <div class="form-group">
-        <label for="first_name">First Name</label>
-        <input id="first_name" name="first_name" type="text" placeholder="Enter your first name" required>
-      </div>
-      <div class="form-group">
-        <label for="last_name">Last Name</label>
-        <input id="last_name" name="last_name" type="text" placeholder="Enter your last name" required>
-      </div>
-      <div class="form-group">
-        <label for="email">Email Address</label>
-        <input id="email" name="email" type="email" placeholder="Enter your email" required>
-      </div>
-      <button type="submit" class="btn">Submit</button>
-      <div id="color-wheel-container" style="margin-bottom:1.5rem;"></div>
-    </form>
-
+  <div class="wrapper">
+    <div class="content">
+      <h1>VeriDeal</h1>
+      <p>
+        Unlock smarter deals validation with VeriDeal.
+        Join 10,000+ sales reps to how VeriDeal can bring you success, start your free trial today.
+      </p>
+      <form action="/signup" method="POST">
+        <div class="form-group">
+          <label for="name">Full Name</label>
+          <input id="name" name="name" type="text" placeholder="Jane Doe" required />
+        </div>
+        <div class="form-group">
+          <label for="email">Work Email</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            placeholder="jane@company.com"
+            required
+          />
+        </div>
+        <div class="form-group">
+          <label for="company">Company</label>
+          <input id="company" name="company" type="text" placeholder="Your Company" />
+        </div>
+        <button type="submit" class="btn-submit">Get Started</button>
+      </form>
+    </div>
+    <div class="image-side">
+      <img src="hero-image.png" alt="VeriDeal platform screenshot" />
+    </div>
   </div>
 </body>
 </html>
