@@ -23,7 +23,7 @@
       justify-content: center;
       align-items: center;
       min-height: 100vh;
-      background: linear-gradient(135deg,  #6B73FF 0%, #000DFF 100%);
+      background: linear-gradient(135deg,  #9396dc 0%, #6469ce 100%);
       color: #fff;
     }
     .container {
@@ -35,7 +35,7 @@
       background: rgba(255, 255, 255, 0.1);
       backdrop-filter: blur(10px);
       border-radius: 12px;
-      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+      box-shadow: 0 8px 32px 0 rgba(94, 98, 154, 0.37);
       
       /* new: flex centering */
       display: flex;
@@ -125,6 +125,8 @@
       {% endif %}
     {% endwith %}
     <p>Some text here</p>
+    <img src="{{ url_for('static', filename='images/stripe.png') }}" alt="Stripe Logo" style="width:120px; height:auto; display:block; margin-bottom:1rem;">
+
     <form action="/submit" method="post">
       <div class="form-group">
         <label for="first_name">First Name</label>
