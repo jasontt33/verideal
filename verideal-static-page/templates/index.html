@@ -128,11 +128,16 @@
 <body>
   <div class="wrapper">
     <div class="content">
-      <h1>VeriDeal</h1>
-      <p>
+      <!-- <h1>VeriDeal</h1> -->
+      <img src="{{ url_for('static', filename='images/verideal.png') }}" alt="Hero Image" style="max-width: 400px; height: auto;">
+      <p style="font-size: 1.2rem; margin-bottom: 1.5rem;">
+        Welcome to VeriDeal, your partner in smarter deals validation. 
+      </p>
+      <p style="font-size: 1.1rem; margin-bottom: 2rem;">
+        Our platform is designed to help sales reps like you validate deals to enhance your job prospects and close more sales.
         Unlock smarter deals validation with VeriDeal.
         Join 10,000+ sales reps to how VeriDeal can bring you success, start your free trial today.
-      </p>
+       </p>
       <form action="/signup" method="POST">
         <div class="form-group">
           <label for="name">Full Name</label>
@@ -151,12 +156,29 @@
         <div class="form-group">
           <label for="company">Company</label>
           <input id="company" name="company" type="text" placeholder="Your Company" />
+          <img src="{{ url_for('static', filename='images/stripe.png') }}" alt="Stripe Image" style="max-width:120px; height:auto;">
+
         </div>
         <button type="submit" class="btn-submit">Get Started</button>
+
       </form>
     </div>
     <div class="image-side">
-      <img src="hero-image.png" alt="VeriDeal platform screenshot" />
+        <video 
+      controls 
+      width="100%" 
+      poster="{{ url_for('static', filename='images/poster.png') }}"
+      style="border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"
+    >
+      <source 
+        src="{{ url_for('static', filename='images/verideal-video.mp4') }}" 
+        type="video/mp4"
+      >
+      <!-- Fallback text for very old browsers -->
+      Your browser doesn’t support HTML5 video.
+    </video>
+
+
     </div>
   </div>
 </body>
