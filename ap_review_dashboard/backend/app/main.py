@@ -1,22 +1,25 @@
 import json
 import os
 import shutil
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import BackgroundTasks, FastAPI, Depends, UploadFile, File, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import desc, text
 from sqlalchemy.orm import Session
 
 from .auth import current_user
-from .db import Base, engine, get_db
+from .checks import run_receipt_checks
+from .db import Base, engine, get_db, SessionLocal
 from .models import Upload, Invoice, Hold, InvoiceNote, Attachment
 from .parser import parse_xlsx
+from .sharepoint import search_sf_approved
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 ATTACHMENT_DIR = Path(os.getenv("ATTACHMENT_DIR", "/data/attachments"))
@@ -35,6 +38,7 @@ def _migrate_columns() -> None:
         # Original audit columns
         conn.execute(text("ALTER TABLE invoice_notes ADD COLUMN IF NOT EXISTS author_email VARCHAR(255) DEFAULT ''"))
         conn.execute(text("ALTER TABLE attachments ADD COLUMN IF NOT EXISTS author_email VARCHAR(255) DEFAULT ''"))
+        conn.execute(text("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS check_status VARCHAR(16) DEFAULT 'pending'"))
         # Extended invoice columns added in v2
         for col_sql in [
             "gl_date VARCHAR(32) DEFAULT ''",
@@ -53,6 +57,15 @@ def _migrate_columns() -> None:
             "modified_by VARCHAR(256) DEFAULT ''",
             "modified_at VARCHAR(32) DEFAULT ''",
             "receipt_url TEXT DEFAULT ''",
+            "non_ded_bank BOOLEAN DEFAULT FALSE",
+            "addr3 VARCHAR(512) DEFAULT ''",
+            "country VARCHAR(128) DEFAULT ''",
+            "country_code VARCHAR(32) DEFAULT ''",
+            "doc_id VARCHAR(128) DEFAULT ''",
+            "created_at VARCHAR(32) DEFAULT ''",
+            "p_number VARCHAR(32) DEFAULT ''",
+            "sp_url TEXT DEFAULT ''",
+            "hold_info TEXT DEFAULT ''",
             "vendor_id VARCHAR(128) DEFAULT ''",
             "mod_flagged BOOLEAN DEFAULT FALSE",
             "true_last_payment VARCHAR(32) DEFAULT ''",
@@ -80,6 +93,7 @@ app = FastAPI(title="AP Review Dashboard")
 # ──────────────────────────────────────────────────────────────────────
 class InvoiceOut(BaseModel):
     id: int
+    # Core
     org: str
     vendor: str
     bill: str
@@ -89,7 +103,53 @@ class InvoiceOut(BaseModel):
     amount: float
     w9: str
     on_hold: bool
+    # Timing
+    gl_date: str = ""
+    due_in: Optional[int] = None
+    # Address
+    addr1: str = ""
+    addr2: str = ""
+    addr3: str = ""
+    city: str = ""
+    country: str = ""
+    country_code: str = ""
+    state: str = ""
+    zip: str = ""
+    # Payment / ACH
+    payment_method: str = ""
+    ach_account_type: str = ""
+    ach_routing: str = ""
+    ach_account: str = ""
+    ach_enabled: bool = False
+    # SAGE audit
+    last_payment: str = ""
+    modified_by: str = ""
+    created_at: str = ""
+    modified_at: str = ""
+    doc_id: str = ""
+    receipt_url: str = ""
+    non_ded_bank: bool = False
+    # SharePoint link + hold detail
+    sp_url: str = ""
+    hold_info: Optional[dict] = None
+    # Vendor-level flags
+    vendor_id: str = ""
+    mod_flagged: bool = False
+    true_last_payment: Optional[str] = None
+    true_modified_at: Optional[str] = None
+    true_modified_by: Optional[str] = None
+    vendor_created_at: Optional[str] = None
+    # P-number
+    p_number: str = ""
+    # Receipt / invoice check results
+    receipt_checked: bool = False
+    receipt_flags: list = []
+    invoice_checked: bool = False
+    invoice_flags: list = []
+    # Reviewer data
     note: str = ""
+    note_author: str = ""
+    note_updated_at: str = ""
     attachments: list[dict] = []
 
 
@@ -146,7 +206,10 @@ def _serialize_invoice(
         # Address
         "addr1": _s(inv.addr1),
         "addr2": _s(inv.addr2),
+        "addr3": _s(inv.addr3),
         "city": _s(inv.city),
+        "country": _s(inv.country),
+        "country_code": _s(inv.country_code),
         "state": _s(inv.state),
         "zip": _s(inv.zip),
         # Payment / ACH
@@ -158,8 +221,14 @@ def _serialize_invoice(
         # SAGE audit
         "last_payment": _s(inv.last_payment),
         "modified_by": _s(inv.modified_by),
+        "created_at": _s(inv.created_at),
         "modified_at": _s(inv.modified_at),
+        "doc_id": _s(inv.doc_id),
         "receipt_url": _s(inv.receipt_url),
+        "non_ded_bank": bool(inv.non_ded_bank),
+        # SharePoint link + hold detail
+        "sp_url": _s(inv.sp_url),
+        "hold_info": json.loads(inv.hold_info) if inv.hold_info and inv.hold_info.startswith("{") else None,
         # Vendor-level flags
         "vendor_id": _s(inv.vendor_id),
         "mod_flagged": bool(inv.mod_flagged),
@@ -167,6 +236,8 @@ def _serialize_invoice(
         "true_modified_at": inv.true_modified_at or None,
         "true_modified_by": inv.true_modified_by or None,
         "vendor_created_at": inv.vendor_created_at or None,
+        # P-number (extracted from bill field)
+        "p_number": _s(inv.p_number),
         # Receipt / invoice check results
         "receipt_checked": bool(inv.receipt_checked),
         "receipt_flags": json.loads(inv.receipt_flags or "[]"),
@@ -203,6 +274,7 @@ def list_uploads(db: Session = Depends(get_db)):
                 "uploaded_at": u.uploaded_at.isoformat(),
                 "invoice_count": u.invoice_count,
                 "hold_count": u.hold_count,
+                "check_status": u.check_status or "skipped",
             }
             for u in rows
         ]
@@ -273,9 +345,81 @@ def list_holds(
     }
 
 
+def _run_checks_background(upload_id: int, invoices: list[dict]) -> None:
+    """Background task: SharePoint P-number lookup + PDF receipt checks."""
+    import logging, traceback
+    log = logging.getLogger(__name__)
+    db = SessionLocal()
+    try:
+        upload = db.get(Upload, upload_id)
+        if not upload:
+            return
+        upload.check_status = "running"
+        db.commit()
+
+        # SharePoint P-number lookup (fast — one API call)
+        p_numbers = list({inv["p_number"] for inv in invoices if inv.get("p_number")})
+        if p_numbers:
+            sp_map = search_sf_approved(p_numbers)
+            if sp_map:
+                for inv_dict in invoices:
+                    pnum = inv_dict.get("p_number", "")
+                    if pnum and pnum in sp_map:
+                        inv_dict["sp_url"] = sp_map[pnum]
+                for inv_dict in invoices:
+                    if not inv_dict.get("sp_url"):
+                        continue
+                    rows = (
+                        db.query(Invoice)
+                        .filter(
+                            Invoice.upload_id == upload_id,
+                            Invoice.org == inv_dict["org"],
+                            Invoice.bill == inv_dict["bill"],
+                        )
+                        .all()
+                    )
+                    for row in rows:
+                        row.sp_url = inv_dict["sp_url"]
+                db.commit()
+
+        # PDF receipt checks (slow — concurrent HTTP fetches)
+        run_receipt_checks(invoices)
+
+        for inv_dict in invoices:
+            rows = (
+                db.query(Invoice)
+                .filter(
+                    Invoice.upload_id == upload_id,
+                    Invoice.org == inv_dict["org"],
+                    Invoice.bill == inv_dict["bill"],
+                )
+                .all()
+            )
+            for row in rows:
+                row.receipt_checked = inv_dict.get("receipt_checked", False)
+                row.receipt_flags   = json.dumps(inv_dict.get("receipt_flags", []))
+                row.invoice_checked = inv_dict.get("invoice_checked", False)
+                row.invoice_flags   = json.dumps(inv_dict.get("invoice_flags", []))
+
+        upload.check_status = "complete"
+        db.commit()
+    except Exception:
+        log.error("Background checks failed:\n%s", traceback.format_exc())
+        try:
+            upload = db.get(Upload, upload_id)
+            if upload:
+                upload.check_status = "error"
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @app.post("/api/upload")
 async def upload_spreadsheet(
     file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
 ):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
@@ -293,11 +437,13 @@ async def upload_spreadsheet(
         stored_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Parse error: {e}")
 
+    has_urls = any(inv.get("receipt_url") for inv in parsed["invoices"])
     upload = Upload(
         filename=file.filename,
         stored_path=str(stored_path),
         invoice_count=len(parsed["invoices"]),
         hold_count=len(parsed["holds"]),
+        check_status="pending" if has_urls else "skipped",
     )
     db.add(upload)
     db.flush()
@@ -318,7 +464,10 @@ async def upload_spreadsheet(
             on_hold=inv["on_hold"],
             addr1=inv.get("addr1", ""),
             addr2=inv.get("addr2", ""),
+            addr3=inv.get("addr3", ""),
             city=inv.get("city", ""),
+            country=inv.get("country", ""),
+            country_code=inv.get("country_code", ""),
             state=inv.get("state", ""),
             zip=inv.get("zip", ""),
             payment_method=inv.get("payment_method", ""),
@@ -328,8 +477,14 @@ async def upload_spreadsheet(
             ach_enabled=inv.get("ach_enabled", False),
             last_payment=inv.get("last_payment", ""),
             modified_by=inv.get("modified_by", ""),
+            created_at=inv.get("created_at", ""),
             modified_at=inv.get("modified_at", ""),
+            doc_id=inv.get("doc_id", ""),
             receipt_url=inv.get("receipt_url", ""),
+            non_ded_bank=inv.get("non_ded_bank", False),
+            p_number=inv.get("p_number", ""),
+            sp_url=inv.get("sp_url", ""),
+            hold_info=json.dumps(inv["hold_info"]) if inv.get("hold_info") else "",
             vendor_id=inv.get("vendor_id", ""),
             mod_flagged=inv.get("mod_flagged", False),
             true_last_payment=inv.get("true_last_payment") or "",
@@ -355,12 +510,65 @@ async def upload_spreadsheet(
 
     db.commit()
 
+    if has_urls and background_tasks is not None:
+        background_tasks.add_task(_run_checks_background, upload.id, parsed["invoices"])
+
     return {
         "upload_id": upload.id,
         "filename": upload.filename,
         "invoice_count": upload.invoice_count,
         "hold_count": upload.hold_count,
+        "check_status": upload.check_status,
     }
+
+
+@app.post("/api/check/{upload_id}")
+async def rerun_checks(
+    upload_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Re-trigger SharePoint lookup + PDF receipt checks for a prior upload."""
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    if upload.check_status == "running":
+        return {"status": "already_running"}
+
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.upload_id == upload_id)
+        .all()
+    )
+    if not invoices:
+        return {"status": "no_invoices"}
+
+    inv_dicts = [
+        {
+            "org":             row.org,
+            "vendor":          row.vendor,
+            "bill":            row.bill,
+            "amount":          float(row.amount),
+            "receipt_url":     row.receipt_url or "",
+            "payment_method":  row.payment_method or "",
+            "ach_routing":     row.ach_routing or "",
+            "ach_account":     row.ach_account or "",
+            "zip":             row.zip or "",
+            "p_number":        row.p_number or "",
+            "sp_url":          row.sp_url or "",
+            "receipt_checked": False,
+            "receipt_flags":   [],
+            "invoice_checked": False,
+            "invoice_flags":   [],
+        }
+        for row in invoices
+    ]
+
+    upload.check_status = "pending"
+    db.commit()
+
+    background_tasks.add_task(_run_checks_background, upload_id, inv_dicts)
+    return {"status": "started", "upload_id": upload_id}
 
 
 @app.put("/api/notes")
@@ -475,6 +683,28 @@ def delete_attachment(att_id: int, db: Session = Depends(get_db)):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/pdf")
+def pdf_proxy(url: str = Query(..., description="PDF URL to fetch and stream")):
+    """Server-side PDF proxy — bypasses CORS/network restrictions in the browser.
+    Only http/https URLs are accepted."""
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Only http/https URLs are supported")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "AP-Dashboard-Proxy/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            content_type = resp.headers.get("Content-Type", "application/pdf")
+            data = resp.read()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch PDF: {e}")
+
+    import io
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=content_type,
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────

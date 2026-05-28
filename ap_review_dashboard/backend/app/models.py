@@ -15,6 +15,8 @@ class Upload(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     invoice_count = Column(Integer, default=0)
     hold_count = Column(Integer, default=0)
+    # "pending" | "running" | "complete" | "skipped"
+    check_status = Column(String(16), default="pending", nullable=False)
 
 
 class Invoice(Base):
@@ -37,7 +39,10 @@ class Invoice(Base):
     # Address
     addr1 = Column(String(512), default="")
     addr2 = Column(String(512), default="")
+    addr3 = Column(String(512), default="")
     city = Column(String(256), default="")
+    country = Column(String(128), default="")
+    country_code = Column(String(32), default="")
     state = Column(String(64), default="")
     zip = Column(String(32), default="")
     # Payment / ACH
@@ -49,8 +54,14 @@ class Invoice(Base):
     # SAGE audit fields
     last_payment = Column(String(32), default="")
     modified_by = Column(String(256), default="")
+    created_at = Column(String(32), default="")
     modified_at = Column(String(32), default="")
+    doc_id = Column(String(128), default="")
     receipt_url = Column(Text, default="")
+    non_ded_bank = Column(Boolean, default=False)
+    p_number = Column(String(32), default="")
+    sp_url = Column(Text, default="")
+    hold_info = Column(Text, default="")
     # Vendor-level flags (from Payment History + Vendor Modified sheets)
     vendor_id = Column(String(128), default="")
     mod_flagged = Column(Boolean, default=False)

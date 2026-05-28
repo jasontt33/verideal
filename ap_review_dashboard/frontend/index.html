@@ -33,11 +33,11 @@ body { font-family: 'Graphik', Arial, sans-serif; background: var(--st-nimbus); 
 .header-subtitle { color: rgba(255,255,255,0.7); font-size: 13px; font-weight: 300; margin-top: 2px; }
 .header-date { color: rgba(255,255,255,0.85); font-size: 13px; font-weight: 400; text-align: right; }
 
-.nav-bar { background: white; border-bottom: 2px solid var(--st-atmosphere); display: flex; align-items: center; padding: 0 36px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-.tab-btn { padding: 14px 22px; font-family: 'Graphik', Arial, sans-serif; font-size: 13.5px; font-weight: 500; color: var(--st-light-gray); border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; white-space: nowrap; letter-spacing: 0.2px; }
+.nav-bar { background: white; border-bottom: 2px solid var(--st-atmosphere); display: flex; align-items: center; padding: 0 20px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow-x: auto; }
+.tab-btn { padding: 14px 14px; font-family: 'Graphik', Arial, sans-serif; font-size: 12.5px; font-weight: 500; color: var(--st-light-gray); border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; white-space: nowrap; letter-spacing: 0.2px; }
 .tab-btn:hover { color: var(--st-light-blue); }
 .tab-btn.active { color: var(--st-light-blue); border-bottom-color: var(--st-light-blue); font-weight: 600; }
-.nav-actions { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.nav-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; padding-left: 12px; flex-shrink: 0; }
 
 .section { padding: 0 36px 36px; display: none; }
 .section.active { display: block; }
@@ -169,7 +169,7 @@ tbody td { padding: 12px 16px; font-size: 13.5px; color: var(--st-dark-gray); }
 .btn-primary:hover { background: var(--st-dark-blue); }
 .btn-secondary { padding: 9px 20px; background: white; color: var(--st-dark-blue); border: 1.5px solid var(--st-dark-blue); border-radius: 6px; font-family: 'Graphik', Arial, sans-serif; font-size: 13.5px; font-weight: 500; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 7px; }
 .btn-secondary:hover { background: var(--st-dark-blue); color: white; }
-.btn-download  { padding: 10px 22px; background: var(--st-dark-blue); color: white; border: none; border-radius: 6px; font-family: 'Graphik', Arial, sans-serif; font-size: 13.5px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: background 0.2s; }
+.btn-download  { padding: 8px 16px; background: var(--st-dark-blue); color: white; border: none; border-radius: 6px; font-family: 'Graphik', Arial, sans-serif; font-size: 12.5px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background 0.2s; white-space: nowrap; }
 .btn-download:hover { background: var(--st-light-blue); }
 
 .org-bar-wrap { background: #e8eef5; border-radius: 4px; height: 6px; margin-top: 5px; }
@@ -224,6 +224,7 @@ tbody td { padding: 12px 16px; font-size: 13.5px; color: var(--st-dark-gray); }
   <button class="tab-btn" onclick="showTab('upload',this)">📁 Upload New Data</button>
   <div class="nav-actions">
     <select id="upload-select" class="upload-select" title="View a previous dashboard"></select>
+    <span id="check-status-pill" style="display:none;font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:10px;white-space:nowrap;"></span>
     <button class="btn-download" onclick="downloadDashboard()">⬇ Download Dashboard</button>
   </div>
 </div>
@@ -484,10 +485,7 @@ let uploadHistory  = [];
 let selectedUploadId = null;
 let currentUser    = null;
 
-const sharepointFiles = {
-  "P-50722": "https://thecss.sharepoint.com/sites/P2P/Shared%20Documents/AP/Salesforce%20Payment%20Processing/SF%20Accounting%20Approved/April%202026/04.21.2026/STT-America%E2%80%99s%20Competitive%20Edge%20Initiative-P-50722.pdf",
-  "P-51336": "https://thecss.sharepoint.com/sites/P2P/Shared%20Documents/AP/Salesforce%20Payment%20Processing/SF%20Accounting%20Approved/April%202026/04.21.2026/Arc%20Insights-P-51336.pdf"
-};
+const sharepointFiles = {};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function fmt(n){ return Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -538,6 +536,61 @@ async function loadAll() {
   renderReceiptTab();
   renderInvoiceMismatchTab();
   renderSpotCheck();
+  // Update check status pill for the currently viewed upload
+  const currentUpload = uploadHistory.find(u => u.id === (uploadMeta && uploadMeta.id)) || uploadHistory[0];
+  if (currentUpload) updateCheckStatusPill(currentUpload.check_status);
+}
+
+let _checkPollTimer = null;
+
+function updateCheckStatusPill(status) {
+  const pill = document.getElementById('check-status-pill');
+  if (!status || status === 'skipped') {
+    pill.style.display = 'none';
+    return;
+  }
+  pill.style.display = 'inline-block';
+  if (status === 'pending' || status === 'running') {
+    pill.style.background = '#EEF7FF';
+    pill.style.color = 'var(--st-dark-blue)';
+    pill.style.border = '1px solid #B0CCE3';
+    pill.textContent = status === 'pending' ? '⏳ Receipt checks queued…' : '⏳ Checking receipts…';
+    _startCheckPolling();
+  } else if (status === 'complete') {
+    pill.style.background = '#e8f8f0';
+    pill.style.color = '#1e8449';
+    pill.style.border = '1px solid #a9dfbf';
+    const flagged = invoiceData.filter(i => (i.receipt_flags && i.receipt_flags.length) || (i.invoice_flags && i.invoice_flags.length)).length;
+    pill.textContent = flagged > 0 ? `✓ Checks done — ${flagged} flag(s)` : '✓ Checks done — All Clear';
+    _stopCheckPolling();
+  } else if (status === 'error') {
+    pill.style.background = '#fde8e6';
+    pill.style.color = 'var(--hold-red)';
+    pill.style.border = '1px solid #f5b7b1';
+    pill.textContent = '✗ Receipt check failed';
+    _stopCheckPolling();
+  }
+}
+
+function _startCheckPolling() {
+  if (_checkPollTimer) return;
+  _checkPollTimer = setInterval(async () => {
+    try {
+      const hist = await api('/api/uploads');
+      const currentUpload = (hist.uploads || [])[0];
+      if (!currentUpload) return;
+      const status = currentUpload.check_status;
+      if (status !== 'pending' && status !== 'running') {
+        await loadAll();  // reload to pick up the flags
+      } else {
+        updateCheckStatusPill(status);
+      }
+    } catch(e) { /* ignore poll errors */ }
+  }, 8000);
+}
+
+function _stopCheckPolling() {
+  if (_checkPollTimer) { clearInterval(_checkPollTimer); _checkPollTimer = null; }
 }
 
 function renderUploadSelector() {
@@ -674,16 +727,14 @@ function openDrilldown(org){
     const note        = inv.note || '';
     const attachments = inv.attachments || [];
 
-    // SharePoint link
+    // SharePoint link — sp_url populated by background task via Azure Graph API
     const pMatch = inv.bill && inv.bill.match(/P-\d+/i);
     let spHtml = '';
-    if(pMatch){
-      const pk = pMatch[0].toUpperCase();
-      if(sharepointFiles[pk]){
-        spHtml=`<a class="sp-link" href="${sharepointFiles[pk]}" target="_blank">📎 SF Approved Doc — ${pk}</a>`;
-      } else {
-        spHtml=`<span class="sp-auto-badge">🔍 Check SF Approved folder for ${pk}</span>`;
-      }
+    if(inv.sp_url){
+      const pk = (pMatch && pMatch[0].toUpperCase()) || inv.p_number || '';
+      spHtml=`<a class="sp-link" href="${esc(inv.sp_url)}" target="_blank">📎 SF Approved Doc${pk ? ' — '+pk : ''}</a>`;
+    } else if(pMatch){
+      spHtml=`<span class="sp-auto-badge">🔍 Check SF Approved folder for ${pMatch[0].toUpperCase()}</span>`;
     } else {
       spHtml=`<span style="font-size:12px;color:var(--st-light-gray);">No P-##### bill — no SF match</span>`;
     }
@@ -774,9 +825,16 @@ function openDrilldown(org){
             <label>Vendor Address</label>
             <span>${[inv.addr1,inv.addr2,inv.city,inv.state,inv.zip].filter(Boolean).join(', ')||'—'}</span>
             ${achHtml}
+            ${inv.ach_enabled!==undefined?`<div style="margin-top:4px;font-size:12px;color:${inv.ach_enabled?'var(--green)':'var(--st-light-gray)'};">${inv.ach_enabled?'✓ ACH Enabled':'✗ ACH Not Enabled'}</div>`:''}
+          </div>
+          <div class="detail-item"><label>True Last Payment</label>
+            <span>${fmtD(inv.true_last_payment||inv.last_payment)||'—'}</span>
           </div>
           <div class="detail-item"><label>Modified By / Date</label>
             <span>${inv.mod_flagged?'<span style="color:var(--amber);font-weight:700;">⚑ ':''}${esc((inv.true_modified_by||inv.modified_by)||'—')}${(inv.true_modified_at||inv.modified_at)?' / '+fmtD(inv.true_modified_at||inv.modified_at):''}${inv.vendor_id?' <span style="font-size:11px;opacity:0.6;">('+esc(inv.vendor_id)+')</span>':''}${inv.mod_flagged?'</span>':''}</span>
+          </div>
+          <div class="detail-item"><label>Vendor Created</label>
+            <span>${fmtD(inv.vendor_created_at)||'—'}</span>
           </div>
         </div>
         <div class="attach-section">
@@ -935,8 +993,8 @@ function renderOver100k(){
 
     const pMatch = inv.bill && inv.bill.match(/P-\d+/i);
     let sp='—';
-    if(pMatch && sharepointFiles[pMatch[0].toUpperCase()]){
-      sp=`<a class="sp-link" href="${sharepointFiles[pMatch[0].toUpperCase()]}" target="_blank" style="font-size:11.5px;padding:4px 10px;">📎 SF Doc</a>`;
+    if(inv.sp_url){
+      sp=`<a class="sp-link" href="${esc(inv.sp_url)}" target="_blank" style="font-size:11.5px;padding:4px 10px;">📎 SF Doc</a>`;
     } else if(pMatch){
       sp=`<span class="sp-auto-badge" style="font-size:11px;">🔍 ${pMatch[0]}</span>`;
     }
@@ -1148,9 +1206,12 @@ async function processFile(file){
     await loadAll();
     s.style.background='#e8f8f0'; s.style.borderColor='#a9dfbf'; s.style.color='#1e8449';
     const modCt = invoiceData.filter(i=>i.mod_flagged).length;
+    const checksNote = r.check_status === 'skipped' ? ' No receipt URLs found.'
+      : r.check_status === 'pending' || r.check_status === 'running' ? ' <span style="color:#1A428A;font-weight:600;">⏳ Receipt checks running in background…</span>' : '';
     s.innerHTML=`✅ <strong>${esc(r.filename)}</strong> loaded — ${r.invoice_count} invoices, ${r.hold_count} holds`
       +(modCt>0?` <span style="color:#F59E0B;font-weight:600;">⚑ ${modCt} vendor mod flag(s).</span>`:'')
-      +`. All tabs updated.`;
+      +`.${checksNote}`;
+    if (r.check_status && r.check_status !== 'skipped') updateCheckStatusPill(r.check_status);
     showToast('Dashboard refreshed with new data');
   } catch(err){
     s.style.background='#fdf0ee'; s.style.borderColor='#f5b7b1'; s.style.color='#c0392b';

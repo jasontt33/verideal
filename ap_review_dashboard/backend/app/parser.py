@@ -49,6 +49,19 @@ def _parse_int(v: Any) -> Optional[int]:
         return None
 
 
+def _extract_url(raw: Any) -> str:
+    """Strip HTML anchor wrappers; return plain URLs unchanged."""
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if "<" not in s:
+        return s
+    m = re.search(r'href=["\']([^"\']+)["\']', s, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return re.sub(r"<[^>]+>", "", s).strip()
+
+
 def _find_col(header: list[str], *names: str) -> int:
     lower = [h.lower() for h in header]
     for n in names:
@@ -121,9 +134,16 @@ def parse_xlsx(path: str) -> dict:
     i_acct     = _find_col(header, "ach account", "account number", "account")
     i_ach_en   = _find_col(header, "ach enabled", "ach")
     i_last_pmt = _find_col(header, "last payment date", "last payment")
-    i_mod_by   = _find_col(header, "modified by", "modified_by")
-    i_mod_at   = _find_col(header, "modified at", "modified date", "modified_at")
-    i_rcpt_url = _find_col(header, "receipt url", "document url", "url", "receipt")
+    i_mod_by      = _find_col(header, "modified by", "modified_by")
+    i_mod_at      = _find_col(header, "modified at", "modified date", "modified_at")
+    i_rcpt_url    = _find_col(header, "receipt url", "document url", "url", "receipt")
+    # Additional SAGE columns present in full exports
+    i_addr3       = _find_col(header, "address 3", "addr3", "address line 3")
+    i_country     = _find_col(header, "country")
+    i_country_code = _find_col(header, "country code", "country_code")
+    i_doc_id      = _find_col(header, "document id", "doc id", "doc_id", "document number", "doc number")
+    i_created_at  = _find_col(header, "created date", "created at", "created_at", "invoice created")
+    i_non_ded_bank = _find_col(header, "non ded bank", "non_ded_bank", "non-ded", "non deductible bank")
 
     if i_vendor < 0 or i_amt < 0:
         raise ValueError(
@@ -175,7 +195,10 @@ def parse_xlsx(path: str) -> dict:
             # Address (SAGE cols 11–18)
             "addr1":           cs(i_addr1, 11),
             "addr2":           cs(-1, 12),
+            "addr3":           cs(i_addr3, 13),
             "city":            cs(i_city, 14),
+            "country":         cs(i_country, 15),
+            "country_code":    cs(i_country_code, 16),
             "state":           cs(i_state, 17),
             "zip":             cs(i_zip, 18),
             # Payment / ACH (SAGE cols 19–23)
@@ -187,10 +210,17 @@ def parse_xlsx(path: str) -> dict:
             # SAGE audit cols 25–30
             "last_payment":    _fmt_date(_cell(r, i_last_pmt, 25)),
             "modified_by":     cs(i_mod_by, 26),
+            "created_at":      _fmt_date(_cell(r, i_created_at, 27)),
             "modified_at":     _fmt_date(_cell(r, i_mod_at, 28)),
-            "receipt_url":     cs(i_rcpt_url, 30),
-            # P-number (used for SharePoint link lookup)
+            "doc_id":          cs(i_doc_id, 29),
+            "receipt_url":     _extract_url(_cell(r, i_rcpt_url, 30)),
+            # Non-deductible bank flag (col 1)
+            "non_ded_bank":    bool(_cell(r, i_non_ded_bank, 1)),
+            # P-number + SharePoint URL (sp_url populated by background task)
             "p_number":        f"P-{p_match.group(1)}" if p_match else "",
+            "sp_url":          "",
+            # Hold detail — populated after hold cross-reference below
+            "hold_info":       None,
             # Vendor-level flags — populated after parsing History/Modified sheets
             "vendor_id":           "",
             "true_last_payment":   None,
@@ -351,6 +381,18 @@ def parse_xlsx(path: str) -> dict:
                 or vl in hold_vendor_set
                 or vnorm in hold_vendor_set
             )
+            if inv["on_hold"]:
+                # Attach the matching hold record details inline
+                inv["hold_info"] = next(
+                    (
+                        h for h in holds
+                        if (
+                            h["vendor"].lower() == vl
+                            or re.sub(r"\b(llc|inc|ltd|corp|co|dba)\b", "", h["vendor"].lower()).strip() == vnorm
+                        )
+                    ),
+                    None,
+                )
 
         for h in holds:
             hv = h["vendor"].lower()[:12]
