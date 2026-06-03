@@ -128,16 +128,62 @@ def _extract_total(text: str) -> Optional[float]:
 
 
 def _extract_billto(text: str) -> str:
-    m = re.search(
-        r"(?:bill\s+to|billed\s+to|invoiced\s+to)\s*[:\n](.*?)(?:\n\n|\Z)",
-        text, re.IGNORECASE | re.DOTALL,
+    """Find recipient line by looking for an address block (street + ZIP).
+
+    Strategy:
+      1. Scan lines for a US ZIP pattern.
+      2. From that line, walk back up to 6 lines to find a street or PO-box line.
+      3. Walk back further to find the first non-title, non-attn, non-numeric
+         candidate line — that's the recipient.
+      4. Fall back to 'Bill To:' / 'To:' regex if no address block found.
+      5. Final fallback: first 150 chars of text.
+    """
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    zip_pat    = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
+    street_pat = re.compile(
+        r"\b\d+\s+\w+[\w\s]*\s+"
+        r"(?:blvd|boulevard|ave|avenue|st|street|rd|road|drive|dr|way|lane|ln|place|pl|suite|ste|floor)\b",
+        re.IGNORECASE,
     )
-    if m:
-        return m.group(1)[:250]
-    m = re.search(r"^To:\s*(.+)$", text, re.MULTILINE)
-    if m:
-        return m.group(1)[:250]
-    return text[:300]
+    po_pat   = re.compile(r"\bP\.?O\.?\s+Box\s+\d+\b", re.IGNORECASE)
+    skip_words = [
+        "director","manager","officer","president","vice","senior","head of",
+        "controller","accountant","treasurer","secretary","coordinator",
+        "billing contact","attention","attn","contact","c/o",
+    ]
+    skip_pfx = re.compile(
+        r"^(Mr\.?|Ms\.?|Mrs\.?|Dr\.?|Prof\.?|Attn:?|Attention:?|C/O|Re:|Dear|To:)\b",
+        re.IGNORECASE,
+    )
+    for i, line in enumerate(lines):
+        if not zip_pat.search(line):
+            continue
+        block = lines[max(0, i - 6):i + 1]
+        sidx = next(
+            (j for j, bl in enumerate(block) if street_pat.search(bl) or po_pat.search(bl)),
+            None,
+        )
+        if sidx is None or sidx == 0:
+            continue
+        for k in range(sidx - 1, -1, -1):
+            c = block[k].strip()
+            if not c or len(c) < 3:
+                continue
+            if skip_pfx.match(c):
+                continue
+            if any(sw in c.lower() for sw in skip_words):
+                continue
+            if re.match(r"^[\d\s\-/\.,]+$", c):
+                continue
+            return c
+    for pat in (r"(?:bill\s+to|billed\s+to|invoiced\s+to)\s*[:\n]\s*(.+)",
+                r"^To:\s*\n?\s*(.+)"):
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            v = m.group(1).strip()
+            if v and len(v) > 2:
+                return v
+    return text[:150]
 
 
 def _fetch_pdf_text(url: str) -> str:
