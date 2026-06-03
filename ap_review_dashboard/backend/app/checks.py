@@ -231,6 +231,76 @@ def _looks_like_brand_example(raw: str) -> bool:
     )
 
 
+def _extract_vendor_from_invoice(text: str, sage_vendor: str):
+    """Smart vendor-name extraction from PDF text.
+
+    Returns (extracted_name | None, result_type) where result_type is one of:
+        'match', 'dba_match', 'prf_blank', 'no_text', 'mismatch'
+    """
+    if not text or len(text.strip()) < 30:
+        return None, "no_text"
+    t = text.strip()
+
+    # Payment Request Form — parse Vendor Name field
+    if re.search(r"PAYMENT\s+REQUEST\s+FORM", t, re.IGNORECASE):
+        m = re.search(r"Vendor\s+Name\s*:\s*?\n(.*?)(?:\n|$)", t, re.IGNORECASE)
+        if m:
+            cand = m.group(1).strip()
+            cand_alpha = re.sub(r"\W", "", cand)
+            is_blank = (
+                not cand_alpha
+                or cand_alpha.upper() in ("NEW", "EXISTING", "NEWEXISTING")
+                or len(cand_alpha) < 2
+            )
+            if is_blank:
+                return None, "prf_blank"
+            sage_norm = _normalize(sage_vendor)
+            cand_norm = _normalize(cand)
+            if sage_norm in cand_norm or cand_norm in sage_norm:
+                return cand, "match"
+            return cand, "mismatch"
+        return None, "prf_blank"
+
+    # DBA: SAGE vendor has "dba X" — find X anywhere in invoice
+    dba_m = re.search(r"\bdba\s+(.+)", sage_vendor, re.IGNORECASE)
+    if dba_m:
+        dba_name = dba_m.group(1).strip()
+        if _normalize(dba_name) in _normalize(t):
+            return dba_name, "dba_match"
+
+    # Full legal name (or pre-DBA portion) anywhere in invoice
+    sage_norm = _normalize(sage_vendor)
+    sage_no_dba = re.sub(r"\s+dba\s+.+", "", sage_vendor, flags=re.IGNORECASE).strip()
+    sage_no_dba_norm = _normalize(sage_no_dba)
+    if sage_norm in _normalize(t) or sage_no_dba_norm in _normalize(t):
+        return sage_vendor, "match"
+
+    # Remit-to / pay-to / make-checks-payable section
+    remit_m = re.search(
+        r"(?:remit\s+(?:payment\s+)?to|make\s+(?:checks?\s+)?(?:payable\s+)?to"
+        r"|pay\s+to(?:\s+the\s+order\s+of)?|please\s+remit(?:\s+check)?\s+to"
+        r"|send\s+(?:payment|check)\s+to)\s*:?\s*\n?\s*([^\n]+)",
+        t, re.IGNORECASE,
+    )
+    if remit_m:
+        rname = remit_m.group(1).strip()
+        if rname and len(rname) > 2:
+            rn = _normalize(rname)
+            if sage_norm in rn or sage_no_dba_norm in rn:
+                return rname, "match"
+            if dba_m and _normalize(dba_m.group(1).strip()) in rn:
+                return rname, "dba_match"
+
+    # Fuzzy word match (≥60% of vendor words ≥4 chars present in first 800 chars)
+    words = [w for w in sage_no_dba_norm.split() if len(w) > 3]
+    if words:
+        tn = _normalize(t[:800])
+        if sum(1 for w in words if w in tn) / len(words) >= 0.6:
+            return sage_vendor, "match"
+
+    return None, "mismatch"
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run_receipt_checks(invoices: list[dict[str, Any]]) -> None:
