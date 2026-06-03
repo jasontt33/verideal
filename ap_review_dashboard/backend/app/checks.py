@@ -1,13 +1,9 @@
 """Receipt and invoice PDF validation.
 
 Fetches each unique receipt_url from the invoice list, extracts text via
-pdfplumber, and runs six checks per invoice:
-  - ACH routing number match
-  - ACH account number match
-  - Address ZIP match
-  - Vendor name fuzzy match
-  - Invoice total amount match
-  - Bill-to entity match
+pdfplumber, and runs per-invoice checks:
+  receipt_flags  — ACH routing # match, ACH account # match
+  invoice_flags  — vendor name, invoice total (skipped for PRFs), bill-to entity
 
 Modifies invoice dicts in-place, populating:
   receipt_checked, receipt_flags, invoice_checked, invoice_flags
@@ -23,6 +19,8 @@ from typing import Any, Optional
 import requests
 import urllib3
 
+from .entities import entities_match, find_entity_in_invoice
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
@@ -34,39 +32,12 @@ log = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-EXCLUDE_ZIPS = {"22203", "22201", "22202", "66101", "66102", "20001", "20002", "20036", "64106"}
-
-ENTITY_ALIASES: dict[str, list[str]] = {
-    "stand together, inc.": [
-        "stand together chamber of commerce",
-        "stand together chamber of commerce, inc.",
-        "stand together chamber of commerce, inc. dba stand together",
-        "stand together inc",
-    ],
-    "americans for prosperity": ["afp"],
-    "americans for prosperity action": ["afp action"],
-    "americans for prosperity state pac": ["afp state pac", "afp pac"],
-    "stand together trust": ["stt"],
-    "stand together foundation": ["stf"],
-    "stand together communications": ["stc"],
-    "bill of rights institute": ["bri"],
-    "libre": ["libre initiative", "libre action"],
-    "cva": ["concerned veterans for america"],
-    "yes, every kid, inc.": ["yes every kid", "yek"],
-    "bigger picture us, inc": ["bigger picture"],
-}
-
-# Known false-positive vendors for specific check types
-ZIP_FP_VENDORS = {
-    "Cavalier Consulting", "Canvass America, LLC", "Targeted Victory",
-    "Angelo State University Foundation, Inc.", "Elek Enterprises LLC", "Traypml, Inc.",
-}
 VENDOR_NAME_FP = {
     "People Who Think, LLC", "Angelo State University Foundation, Inc.",
     "Traypml, Inc.", "Frost Brown Todd LLC dba FBT Gibbons LLP",
 }
 ENTITY_FP_VENDORS = {
-    "People Who Think, LLC", "Traypml, Inc.", "May Adam Gerdes & Thompson LLP",
+    "Traypml, Inc.", "May Adam Gerdes & Thompson LLP",
 }
 
 _pdf_cache: dict[str, str] = {}
@@ -80,33 +51,6 @@ def _normalize(s: str) -> str:
     s = re.sub(r"[,\.\-]", " ", s)
     s = re.sub(r"\b(llc|inc|ltd|corp|co|dba|the|and|&)\b", "", s)
     return re.sub(r"\s+", " ", s).strip()
-
-
-def _entity_match(sage_entity: str, pdf_billto: str) -> bool:
-    se = sage_entity.lower().strip()
-    bt = pdf_billto.lower()
-    if _normalize(se) in _normalize(bt) or _normalize(bt) in _normalize(se):
-        return True
-    for alias in ENTITY_ALIASES.get(se, []):
-        if _normalize(alias) in _normalize(bt):
-            return True
-    for canonical, aliases in ENTITY_ALIASES.items():
-        if se == canonical or se in [a.lower() for a in aliases]:
-            for a in aliases + [canonical]:
-                if _normalize(a) in _normalize(bt):
-                    return True
-    return False
-
-
-def _vendor_match(sage_vendor: str, pdf_text: str) -> bool:
-    nv = _normalize(sage_vendor)
-    nt = _normalize(pdf_text[:600])
-    if not nv or len(pdf_text) < 50:
-        return True
-    words = [w for w in nv.split() if len(w) > 2]
-    if not words:
-        return True
-    return sum(1 for w in words if w in nt) / len(words) >= 0.55
 
 
 def _extract_total(text: str) -> Optional[float]:
@@ -221,14 +165,23 @@ def _looks_like_brand_example(raw: str) -> bool:
 
     Forms like 'ex. STCC, AFP, STF, ST-' or 'STCC, AFP, STF' are template
     examples in the form's left column, not filled values.
+
+    The comma-list condition requires every token to look like a short
+    uppercase abbreviation (optionally with a trailing dash) so legitimate
+    entity names like "yes, every kid, inc." are not flagged.
     """
     s = raw.strip()
-    return bool(
-        re.search(r"\bex\.?\s", s, re.IGNORECASE)
-        or (s.count(",") >= 2 and len(s) < 40)
-        or s.endswith("-")
-        or re.match(r"^[A-Z]{2,5}(,\s*[A-Z]{2,5})+$", s)
-    )
+    if re.search(r"\bex\.?\s", s, re.IGNORECASE):
+        return True
+    if s.endswith("-"):
+        return True
+    if re.match(r"^[A-Z]{2,5}(,\s*[A-Z]{2,5})+$", s):
+        return True
+    if s.count(",") >= 2 and len(s) < 40:
+        tokens = [t.strip() for t in s.split(",") if t.strip()]
+        if tokens and all(re.match(r"^[A-Z]{1,6}-?$", t) for t in tokens):
+            return True
+    return False
 
 
 def _extract_vendor_from_invoice(text: str, sage_vendor: str):
@@ -368,54 +321,62 @@ def run_receipt_checks(invoices: list[dict[str, Any]]) -> None:
                     "detail": f"PDF: {pdf_a} | SAGE: {sage_a}",
                 })
 
-        # ZIP code
-        if (is_ach or is_check) and inv.get("zip"):
-            sage_z = re.sub(r"\D", "", inv["zip"])[:5]
-            for line in text.split("\n"):
-                zm = re.search(r"\b([A-Z]{2})[,\s]+(\d{5})\b", line)
-                if zm and zm.group(2) not in EXCLUDE_ZIPS:
-                    if zm.group(2) != sage_z:
-                        inv["receipt_flags"].append({
-                            "type": "zip_mismatch", "severity": "medium",
-                            "label": "Address ZIP Mismatch",
-                            "detail": f"PDF: {zm.group(2)} | SAGE: {sage_z}",
-                        })
-                    break
+        # ZIP check intentionally removed (per AP team request).
 
         # Vendor name
-        if not _vendor_match(inv.get("vendor", ""), text):
+        extracted, vendor_result = _extract_vendor_from_invoice(text, inv.get("vendor", ""))
+        if vendor_result == "mismatch":
             inv["invoice_flags"].append({
                 "type": "vendor_mismatch", "severity": "high",
                 "label": "Vendor Name Mismatch",
-                "detail": f"SAGE: {inv.get('vendor', '')} | PDF: {text[:70].strip()}",
+                "detail": f"SAGE: {inv.get('vendor', '')} | PDF: {(extracted or text[:60]).strip()}",
             })
 
-        # Amount
-        pdf_total  = _extract_total(text)
-        sage_total = float(inv.get("amount", 0) or 0)
-        if pdf_total and sage_total and abs(pdf_total - sage_total) > 0.02:
-            inv["invoice_flags"].append({
-                "type": "amount_mismatch", "severity": "high",
-                "label": "Amount Mismatch",
-                "detail": f"PDF total: ${pdf_total:,.2f} | SAGE: ${sage_total:,.2f}",
-            })
+        # Amount — skipped for PRFs (image-based form; reimbursement totals don't match receipts)
+        if not _is_prf(text):
+            pdf_total  = _extract_total(text)
+            sage_total = float(inv.get("amount", 0) or 0)
+            if pdf_total and sage_total and abs(pdf_total - sage_total) > 0.02:
+                inv["invoice_flags"].append({
+                    "type": "amount_mismatch", "severity": "high",
+                    "label": "Amount Mismatch",
+                    "detail": f"PDF total: ${pdf_total:,.2f} | SAGE: ${sage_total:,.2f}",
+                })
 
         # Bill-to entity
-        billto = _extract_billto(text)
-        if not _entity_match(inv.get("org", inv.get("entity", "")), billto):
-            inv["invoice_flags"].append({
-                "type": "entity_mismatch", "severity": "medium",
-                "label": "Bill-To Entity Mismatch",
-                "detail": f"SAGE entity: {inv.get('org', inv.get('entity', ''))} | PDF bill-to: {billto[:80].strip()}",
-            })
+        sage_entity = inv.get("org") or inv.get("entity", "")
+        if _is_prf(text):
+            brand_m = re.search(r"Brand\s*:\s*([^\n\(]+)", text, re.IGNORECASE)
+            if brand_m:
+                raw_brand = brand_m.group(1).strip()
+                if not _looks_like_brand_example(raw_brand) and len(raw_brand) >= 2:
+                    if not entities_match(sage_entity, raw_brand):
+                        inv["invoice_flags"].append({
+                            "type": "entity_mismatch", "severity": "medium",
+                            "label": "Bill-To Entity Mismatch",
+                            "detail": f"SAGE entity: {sage_entity} | PDF Brand field: {raw_brand}",
+                        })
+            # PRF with unreadable brand field — skip entity check
+        else:
+            billto_addr = _extract_billto(text)
+            found_name, found_canonical = (None, None)
+            if billto_addr and len(billto_addr.strip()) > 2:
+                found_name, found_canonical = find_entity_in_invoice(billto_addr)
+            if found_name is None:
+                found_name, found_canonical = find_entity_in_invoice(text)
+            if found_name is not None and not entities_match(sage_entity, found_canonical):
+                # Skip flag if SAGE entity itself appears anywhere in text
+                _, sage_in_text = find_entity_in_invoice(text)
+                if not (sage_in_text and entities_match(sage_entity, sage_in_text)):
+                    inv["invoice_flags"].append({
+                        "type": "entity_mismatch", "severity": "medium",
+                        "label": "Bill-To Entity Mismatch",
+                        "detail": f"SAGE entity: {sage_entity} | PDF: {found_name}",
+                    })
 
     # Remove known false positives
     for inv in invoices:
         v = inv.get("vendor", "")
-        inv["receipt_flags"] = [
-            f for f in inv["receipt_flags"]
-            if not (f["type"] == "zip_mismatch" and v in ZIP_FP_VENDORS)
-        ]
         inv["invoice_flags"] = [
             f for f in inv["invoice_flags"]
             if not (f["type"] == "vendor_mismatch" and v in VENDOR_NAME_FP)

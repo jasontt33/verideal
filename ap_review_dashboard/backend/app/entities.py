@@ -98,6 +98,8 @@ ENTITY_ALIASES_FULL = {
 # ── Helpers ──────────────────────────────────────────────────────────────
 def normalize(s: str) -> str:
     """Lowercase, strip punctuation, drop common suffixes, collapse whitespace."""
+    if not s:
+        return ""
     s = s.lower().strip()
     s = re.sub(r"[,\.\-]", " ", s)
     s = re.sub(r"\b(llc|inc|ltd|corp|co|dba|the|and|&)\b", "", s)
@@ -116,6 +118,8 @@ def resolve_entity(name_lower: str) -> str:
 
 def entities_match(sage_entity: str, found_entity: str) -> bool:
     """True iff two entity strings refer to the same paying entity."""
+    if not sage_entity or not found_entity:
+        return False
     se = sage_entity.lower().strip()
     fe = found_entity.lower().strip()
     if not se or not fe:
@@ -154,6 +158,8 @@ def find_entity_in_invoice(text: str):
     Iterates ALL_ENTITY_NAMES sorted by length desc so longer matches win.
     Uses \\b word boundaries for short (≤5 char) names to avoid substring noise.
     """
+    if not text:
+        return None, None
     text_lower = text.lower()
     for name in sorted(ALL_ENTITY_NAMES, key=len, reverse=True):
         if len(name) < 3:
