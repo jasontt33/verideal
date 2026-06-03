@@ -161,6 +161,30 @@ def _fetch_pdf_text(url: str) -> str:
     return text
 
 
+# ── PRF helpers ───────────────────────────────────────────────────────────────
+
+def _is_prf(text: str) -> bool:
+    """True iff the PDF text contains 'PAYMENT REQUEST FORM' (whitespace-tolerant)."""
+    if not text:
+        return False
+    return bool(re.search(r"PAYMENT\s+REQUEST\s+FORM", text, re.IGNORECASE))
+
+
+def _looks_like_brand_example(raw: str) -> bool:
+    """Detect placeholder/example text in a PRF Brand field.
+
+    Forms like 'ex. STCC, AFP, STF, ST-' or 'STCC, AFP, STF' are template
+    examples in the form's left column, not filled values.
+    """
+    s = raw.strip()
+    return bool(
+        re.search(r"\bex\.?\s", s, re.IGNORECASE)
+        or (s.count(",") >= 2 and len(s) < 40)
+        or s.endswith("-")
+        or re.match(r"^[A-Z]{2,5}(,\s*[A-Z]{2,5})+$", s)
+    )
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run_receipt_checks(invoices: list[dict[str, Any]]) -> None:
