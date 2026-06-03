@@ -30,6 +30,10 @@ services:
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
       AZURE_APP_ID: ${AZURE_APP_ID:-}
+      SP_SEARCH_FOLDER:      ${SP_SEARCH_FOLDER:-AP/Daily Payment Approvals}
+      SP_MIN_BILL_LENGTH:    ${SP_MIN_BILL_LENGTH:-4}
+      SP_BILL_TIER_ENABLED:  ${SP_BILL_TIER_ENABLED:-true}
+      SP_SEARCH_CONCURRENCY: ${SP_SEARCH_CONCURRENCY:-8}
     volumes:
       - uploads:/data/uploads
       - attachments:/data/attachments
