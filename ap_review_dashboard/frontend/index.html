@@ -346,7 +346,7 @@ tbody td { padding: 12px 16px; font-size: 13.5px; color: var(--st-dark-gray); }
     <div class="org-table-wrap">
       <table>
         <thead>
-          <tr><th>Organization</th><th>Vendor</th><th>Bill #</th><th>Description</th><th>Date</th><th>Amount</th><th>Receipt</th><th>SF Doc</th><th>Attachments</th><th>Notes</th></tr>
+          <tr><th>Organization</th><th>Vendor</th><th>Bill #</th><th>Description</th><th>Date</th><th>Amount</th><th>Receipt</th><th>SP Docs</th><th>Attachments</th><th>Notes</th></tr>
         </thead>
         <tbody id="over100k-tbody"></tbody>
       </table>
@@ -490,6 +490,22 @@ const sharepointFiles = {};
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function fmt(n){ return Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtD(s){ if(!s) return '—'; return s.replace(/-/g,'/'); }
+function normVendor(s){
+  return (s||'').toLowerCase()
+    .replace(/[,\.\-]/g, ' ')
+    .replace(/\b(llc|inc|ltd|corp|co|dba)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function findHoldForInvoice(inv){
+  const vl = (inv.vendor||'').toLowerCase();
+  const vn = normVendor(inv.vendor);
+  return holdListData.find(h => {
+    const hl = h.vendor.toLowerCase();
+    const hn = normVendor(h.vendor);
+    return hl === vl || hn === vn;
+  });
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 const escHtml = esc;
 
@@ -527,7 +543,10 @@ async function loadAll() {
     invoice_date: i.date,
     w9_type:      i.w9,
   }));
-  holdListData   = hl.holds || [];
+  holdListData   = (hl.holds || []).map(h => ({
+    ...h,
+    vendor: (h.vendor || '').replace(/^\d+\.\)\s*/, '').trim(),
+  }));
   uploadHistory  = hist.uploads || [];
   renderUploadSelector();
   renderSummary();
@@ -662,9 +681,16 @@ function renderSummary(){
   document.getElementById('kpi-orgs').textContent   = orgs.length;
   document.getElementById('kpi-mods').textContent   = modCount;
 
-  const receiptFlagged = invoiceData.filter(i=>i.receipt_flags&&i.receipt_flags.length>0);
-  const rHigh = receiptFlagged.filter(i=>i.receipt_flags.some(f=>f.severity==='high')).length;
-  const rMed  = receiptFlagged.filter(i=>i.receipt_flags.some(f=>f.severity==='medium')&&!i.receipt_flags.some(g=>g.severity==='high')).length;
+  // Receipt Discrepancies KPI: count BOTH receipt_flags (remittance) AND invoice_flags (mismatches)
+  const receiptFlagged = invoiceData.filter(i =>
+    (i.receipt_flags && i.receipt_flags.length>0) ||
+    (i.invoice_flags && i.invoice_flags.length>0)
+  );
+  const allFlagsTop = invoiceData.flatMap(i =>
+    [...(i.receipt_flags||[]), ...(i.invoice_flags||[])]
+  );
+  const rHigh = allFlagsTop.filter(f=>f.severity==='high').length;
+  const rMed  = allFlagsTop.filter(f=>f.severity==='medium').length;
   const receiptEl = document.getElementById('kpi-receipts');
   if(receiptFlagged.length===0){ receiptEl.textContent='✓ Clear'; receiptEl.style.color='var(--green)'; }
   else { receiptEl.textContent=receiptFlagged.length; receiptEl.style.color='var(--hold-red)'; }
@@ -689,8 +715,13 @@ function renderSummary(){
     if(d.mods>0) hb += `<span class="mod-badge">⚑ ${d.mods} mod</span>`;
 
     const orgInvs = invoiceData.filter(i=>i.entity===org);
-    const rfHigh = orgInvs.filter(i=>i.receipt_flags&&i.receipt_flags.some(f=>f.severity==='high')).length;
-    const rfMed  = orgInvs.filter(i=>i.receipt_flags&&i.receipt_flags.some(f=>f.severity==='medium')&&!i.receipt_flags.some(f=>f.severity==='high')).length;
+    const rfHigh = orgInvs.filter(i =>
+      [...(i.receipt_flags||[]), ...(i.invoice_flags||[])].some(f=>f.severity==='high')
+    ).length;
+    const rfMed  = orgInvs.filter(i => {
+      const all = [...(i.receipt_flags||[]), ...(i.invoice_flags||[])];
+      return all.some(f=>f.severity==='medium') && !all.some(f=>f.severity==='high');
+    }).length;
     let rcptCell = '';
     if(rfHigh>0) rcptCell += `<span class="hold-badge" style="background:#fde8e6;color:var(--hold-red);border-color:#f5b7b1;">🚨 ${rfHigh} high</span> `;
     if(rfMed>0)  rcptCell += `<span class="hold-badge" style="background:#FEF3C7;color:#92400E;border-color:#FDE68A;">⚠ ${rfMed} med</span>`;
@@ -727,16 +758,25 @@ function openDrilldown(org){
     const note        = inv.note || '';
     const attachments = inv.attachments || [];
 
-    // SharePoint link — sp_url populated by background task via Azure Graph API
+    // SharePoint links — inv.sp_docs is the full match list (P-number or bill-number)
     const pMatch = inv.bill && inv.bill.match(/P-\d+/i);
+    const spDocs = (inv.sp_docs && inv.sp_docs.length>0)
+      ? inv.sp_docs
+      : (inv.sp_url ? [{name:'SP Doc', url:inv.sp_url, reason:''}] : []);
     let spHtml = '';
-    if(inv.sp_url){
-      const pk = (pMatch && pMatch[0].toUpperCase()) || inv.p_number || '';
-      spHtml=`<a class="sp-link" href="${esc(inv.sp_url)}" target="_blank">📎 SF Approved Doc${pk ? ' — '+pk : ''}</a>`;
+    if(spDocs.length>0){
+      spHtml = spDocs.map(d => {
+        const label = esc(d.name.replace(/^(BP|STT|STF|CKF|AFP|AFPF|STC|BRI|STB|STMSE)-/i,'')
+                                .replace(/_/g,' ')
+                                .replace(/\.pdf$/i,'')
+                                .substring(0,30));
+        const tooltip = d.reason ? ` title="Matched by ${esc(d.reason)}"` : '';
+        return `<a class="sp-link"${tooltip} href="${esc(d.url)}" target="_blank" style="margin:1px 2px;display:inline-block;">📎 ${label}</a>`;
+      }).join(' ');
     } else if(pMatch){
-      spHtml=`<span class="sp-auto-badge">🔍 Check SF Approved folder for ${pMatch[0].toUpperCase()}</span>`;
+      spHtml=`<span class="sp-auto-badge">🔍 Check SP folder for ${pMatch[0].toUpperCase()}</span>`;
     } else {
-      spHtml=`<span style="font-size:12px;color:var(--st-light-gray);">No P-##### bill — no SF match</span>`;
+      spHtml=`<span style="font-size:12px;color:var(--st-light-gray);">No supporting docs found</span>`;
     }
 
     // Receipt PDF link
@@ -755,7 +795,7 @@ function openDrilldown(org){
     }
 
     // Banners (hold, mod, receipt flags)
-    const hi = holdListData.find(h => inv.vendor.toLowerCase().includes(h.vendor.trim().toLowerCase().slice(0,8)));
+    const hi = findHoldForInvoice(inv);
     let banners = '';
     if(inv.on_hold){
       banners += `<div class="hold-banner">⚠ PAYMENT HOLD${hi?` <span class="hold-ticket">${esc(hi.ticket)}</span> — ${esc(hi.reason)}`:''}
@@ -962,7 +1002,12 @@ function renderHoldList(){
 
   const con = document.getElementById('hold-cards-container'); con.innerHTML='';
   holdListData.forEach(h=>{
-    const inv = invoiceData.find(i=>i.on_hold && i.vendor.toLowerCase().includes(h.vendor.trim().toLowerCase().slice(0,8)));
+    const hl = h.vendor.toLowerCase(), hn = normVendor(h.vendor);
+    const inv = invoiceData.find(i => {
+      if(!i.on_hold) return false;
+      const vl = (i.vendor||'').toLowerCase();
+      return vl === hl || normVendor(i.vendor) === hn;
+    });
     const el  = document.createElement('div'); el.className='hc';
     el.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:6px;">
       <div><div class="hc-org">${esc(h.org)}</div><div class="hc-vendor">${esc(h.vendor)}</div></div>
@@ -992,9 +1037,19 @@ function renderOver100k(){
     const atts = inv.attachments || [];
 
     const pMatch = inv.bill && inv.bill.match(/P-\d+/i);
+    const spDocs = (inv.sp_docs && inv.sp_docs.length>0)
+      ? inv.sp_docs
+      : (inv.sp_url ? [{name:'SP Doc', url:inv.sp_url, reason:''}] : []);
     let sp='—';
-    if(inv.sp_url){
-      sp=`<a class="sp-link" href="${esc(inv.sp_url)}" target="_blank" style="font-size:11.5px;padding:4px 10px;">📎 SF Doc</a>`;
+    if(spDocs.length>0){
+      sp = spDocs.map(d => {
+        const label = esc(d.name.replace(/^(BP|STT|STF|CKF|AFP|AFPF|STC|BRI|STB|STMSE)-/i,'')
+                                .replace(/_/g,' ')
+                                .replace(/\.pdf$/i,'')
+                                .substring(0,30));
+        const tooltip = d.reason ? ` title="Matched by ${esc(d.reason)}"` : '';
+        return `<a class="sp-link"${tooltip} href="${esc(d.url)}" target="_blank" style="font-size:11.5px;padding:4px 10px;margin:1px 2px;display:inline-block;">📎 ${label}</a>`;
+      }).join(' ');
     } else if(pMatch){
       sp=`<span class="sp-auto-badge" style="font-size:11px;">🔍 ${pMatch[0]}</span>`;
     }
@@ -1239,11 +1294,14 @@ function downloadDashboard(){
       const note=inv.note||''; const atts=(inv.attachments||[]).map(a=>a.name).join(', ');
       const hs=inv.on_hold?'background:#fdf0ee;':'';
       const hb=inv.on_hold?'<span style="color:#EE7623;font-weight:600;">⚠ On Hold</span>':'<span style="color:#27AE60;font-weight:600;">✓ Clear</span>';
-      return `<tr style="${hs}"><td>${esc(inv.vendor)}</td><td>${esc(inv.bill)}</td><td>${esc(inv.reference)}</td><td>${fmtD(inv.invoice_date)}</td><td>${fmtD(inv.due_date)}</td><td style="text-align:right;font-weight:600;">$${fmt(inv.amount)}</td><td>${esc(inv.w9_type)}</td><td style="text-align:center;">${hb}</td><td>${esc(note)}</td><td>${esc(atts)}</td></tr>`;
+      const rcptCellExport = inv.receipt_url
+        ? `<a href="${esc(inv.receipt_url)}" target="_blank">📄 Receipt</a>`
+        : '<span style="color:#999;">—</span>';
+      return `<tr style="${hs}"><td>${esc(inv.vendor)}</td><td>${esc(inv.bill)}</td><td>${esc(inv.reference)}</td><td>${fmtD(inv.invoice_date)}</td><td>${fmtD(inv.due_date)}</td><td style="text-align:right;font-weight:600;">$${fmt(inv.amount)}</td><td>${esc(inv.w9_type)}</td><td>${rcptCellExport}</td><td style="text-align:center;">${hb}</td><td>${esc(note)}</td><td>${esc(atts)}</td></tr>`;
     }).join('');
     return `<h2 style="margin-top:32px;padding:10px 14px;background:#1A428A;color:white;border-radius:6px 6px 0 0;font-size:14px;font-weight:600;">${esc(org)}</h2>
       <p style="font-size:12px;color:#5A6771;margin:6px 0 8px;">${oi.length} invoice${oi.length!==1?'s':''} · Total: <strong style="color:#1A428A;">$${fmt(et)}</strong></p>
-      <table><thead><tr><th>Vendor</th><th>Bill #</th><th>Description</th><th>Invoice Date</th><th>Due Date</th><th style="text-align:right;">Amount</th><th>W-9 Type</th><th style="text-align:center;">Status</th><th>Notes</th><th>Attachments</th></tr></thead><tbody>${invRows}</tbody></table>
+      <table><thead><tr><th>Vendor</th><th>Bill #</th><th>Description</th><th>Invoice Date</th><th>Due Date</th><th style="text-align:right;">Amount</th><th>W-9 Type</th><th>Receipt</th><th style="text-align:center;">Status</th><th>Notes</th><th>Attachments</th></tr></thead><tbody>${invRows}</tbody></table>
       <p style="text-align:right;font-size:12px;font-weight:600;color:#1A428A;margin:4px 0 0;">Entity Total: $${fmt(et)}</p>`;
   }).join('');
   const hr=holdListData.map(h=>`<tr><td>${esc(h.org)}</td><td>${esc(h.vendor)}</td><td>${esc(h.reason)}</td><td>${esc(h.ticket)}</td><td style="text-align:right;">$${fmt(h.amount)}</td><td>${esc(h.notes)}</td></tr>`).join('');
