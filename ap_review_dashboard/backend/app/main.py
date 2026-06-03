@@ -19,7 +19,7 @@ from .checks import run_receipt_checks
 from .db import Base, engine, get_db, SessionLocal
 from .models import Upload, Invoice, Hold, InvoiceNote, Attachment
 from .parser import parse_xlsx
-from .sharepoint import search_sf_approved
+from .sharepoint import search_supporting_docs
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 ATTACHMENT_DIR = Path(os.getenv("ATTACHMENT_DIR", "/data/attachments"))
@@ -65,6 +65,7 @@ def _migrate_columns() -> None:
             "created_at VARCHAR(32) DEFAULT ''",
             "p_number VARCHAR(32) DEFAULT ''",
             "sp_url TEXT DEFAULT ''",
+            "sp_docs TEXT DEFAULT '[]'",
             "hold_info TEXT DEFAULT ''",
             "vendor_id VARCHAR(128) DEFAULT ''",
             "mod_flagged BOOLEAN DEFAULT FALSE",
@@ -131,6 +132,7 @@ class InvoiceOut(BaseModel):
     non_ded_bank: bool = False
     # SharePoint link + hold detail
     sp_url: str = ""
+    sp_docs: list[dict] = []  # [{name, url, reason}]
     hold_info: Optional[dict] = None
     # Vendor-level flags
     vendor_id: str = ""
@@ -228,6 +230,7 @@ def _serialize_invoice(
         "non_ded_bank": bool(inv.non_ded_bank),
         # SharePoint link + hold detail
         "sp_url": _s(inv.sp_url),
+        "sp_docs": json.loads(inv.sp_docs) if inv.sp_docs else [],
         "hold_info": json.loads(inv.hold_info) if inv.hold_info and inv.hold_info.startswith("{") else None,
         # Vendor-level flags
         "vendor_id": _s(inv.vendor_id),
@@ -357,30 +360,14 @@ def _run_checks_background(upload_id: int, invoices: list[dict]) -> None:
         upload.check_status = "running"
         db.commit()
 
-        # SharePoint P-number lookup (fast — one API call)
-        p_numbers = list({inv["p_number"] for inv in invoices if inv.get("p_number")})
-        if p_numbers:
-            sp_map = search_sf_approved(p_numbers)
-            if sp_map:
-                for inv_dict in invoices:
-                    pnum = inv_dict.get("p_number", "")
-                    if pnum and pnum in sp_map:
-                        inv_dict["sp_url"] = sp_map[pnum]
-                for inv_dict in invoices:
-                    if not inv_dict.get("sp_url"):
-                        continue
-                    rows = (
-                        db.query(Invoice)
-                        .filter(
-                            Invoice.upload_id == upload_id,
-                            Invoice.org == inv_dict["org"],
-                            Invoice.bill == inv_dict["bill"],
-                        )
-                        .all()
-                    )
-                    for row in rows:
-                        row.sp_url = inv_dict["sp_url"]
-                db.commit()
+        # SharePoint multi-doc lookup (P-number tier + bill-number tier)
+        sp_results = search_supporting_docs(invoices)
+        for inv_dict in invoices:
+            key  = inv_dict["vendor"] + "||" + inv_dict["bill"]
+            docs = sp_results.get(key, [])
+            inv_dict["sp_docs"] = docs
+            inv_dict["sp_url"]  = docs[0]["url"] if docs else inv_dict.get("sp_url", "")
+        # DB write of sp_url / sp_docs happens in the consolidated persist loop below.
 
         # PDF receipt checks (slow — concurrent HTTP fetches)
         run_receipt_checks(invoices)
@@ -396,6 +383,8 @@ def _run_checks_background(upload_id: int, invoices: list[dict]) -> None:
                 .all()
             )
             for row in rows:
+                row.sp_url          = inv_dict.get("sp_url", row.sp_url)
+                row.sp_docs         = json.dumps(inv_dict.get("sp_docs", []))
                 row.receipt_checked = inv_dict.get("receipt_checked", False)
                 row.receipt_flags   = json.dumps(inv_dict.get("receipt_flags", []))
                 row.invoice_checked = inv_dict.get("invoice_checked", False)

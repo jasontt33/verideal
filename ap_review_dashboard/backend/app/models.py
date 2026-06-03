@@ -61,6 +61,7 @@ class Invoice(Base):
     non_ded_bank = Column(Boolean, default=False)
     p_number = Column(String(32), default="")
     sp_url = Column(Text, default="")
+    sp_docs = Column(Text, default="[]")  # JSON array of {name, url, reason}
     hold_info = Column(Text, default="")
     # Vendor-level flags (from Payment History + Vendor Modified sheets)
     vendor_id = Column(String(128), default="")
