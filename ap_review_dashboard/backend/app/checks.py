@@ -1,0 +1,387 @@
+"""Receipt and invoice PDF validation.
+
+Fetches each unique receipt_url from the invoice list, extracts text via
+pdfplumber, and runs per-invoice checks:
+  receipt_flags  — ACH routing # match, ACH account # match
+  invoice_flags  — vendor name, invoice total (skipped for PRFs), bill-to entity
+
+Modifies invoice dicts in-place, populating:
+  receipt_checked, receipt_flags, invoice_checked, invoice_flags
+"""
+import io
+import json
+import logging
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Optional
+
+import requests
+import urllib3
+
+from .entities import entities_match, find_entity_in_invoice
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+try:
+    import pdfplumber as _pdfplumber
+except ImportError:  # not installed in test env; PDF checks will be no-ops
+    _pdfplumber = None  # type: ignore
+
+log = logging.getLogger(__name__)
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+VENDOR_NAME_FP = {
+    "People Who Think, LLC", "Angelo State University Foundation, Inc.",
+    "Traypml, Inc.", "Frost Brown Todd LLC dba FBT Gibbons LLP",
+}
+ENTITY_FP_VENDORS = {
+    "Traypml, Inc.", "May Adam Gerdes & Thompson LLP",
+}
+
+_pdf_cache: dict[str, str] = {}
+_pdf_cache_lock = threading.Lock()
+
+
+# ── Text helpers ──────────────────────────────────────────────────────────────
+
+def _normalize(s: str) -> str:
+    s = s.lower().strip()
+    s = re.sub(r"[,\.\-]", " ", s)
+    s = re.sub(r"\b(llc|inc|ltd|corp|co|dba|the|and|&)\b", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _extract_total(text: str) -> Optional[float]:
+    patterns = [
+        r"(?:total\s+amount\s+due|amount\s+due|total\s+due|invoice\s+total|grand\s+total|balance\s+due)\s*:?\s*(?:usd\s*)?\$?\s*([\d,]+\.?\d*)",
+        r"(?:^|\n)\s*total\s*:?\s*\$?\s*([\d,]+\.?\d*)\s*(?:\n|$)",
+        r"total\s+\$\s*([\d,]+\.?\d*)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            try:
+                v = float(m.group(1).replace(",", ""))
+                if v > 0:
+                    return v
+            except Exception:
+                pass
+    return None
+
+
+def _extract_billto(text: str) -> str:
+    """Find recipient line by looking for an address block (street + ZIP).
+
+    Strategy:
+      1. Scan lines for a US ZIP pattern.
+      2. From that line, walk back up to 6 lines to find a street or PO-box line.
+      3. Walk back further to find the first non-title, non-attn, non-numeric
+         candidate line — that's the recipient.
+      4. Fall back to 'Bill To:' / 'To:' regex if no address block found.
+      5. Final fallback: first 150 chars of text.
+    """
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    zip_pat    = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
+    street_pat = re.compile(
+        r"\b\d+\s+\w+[\w\s]*\s+"
+        r"(?:blvd|boulevard|ave|avenue|st|street|rd|road|drive|dr|way|lane|ln|place|pl|suite|ste|floor)\b",
+        re.IGNORECASE,
+    )
+    po_pat   = re.compile(r"\bP\.?O\.?\s+Box\s+\d+\b", re.IGNORECASE)
+    skip_words = [
+        "director","manager","officer","president","vice","senior","head of",
+        "controller","accountant","treasurer","secretary","coordinator",
+        "billing contact","attention","attn","contact","c/o",
+    ]
+    skip_pfx = re.compile(
+        r"^(Mr\.?|Ms\.?|Mrs\.?|Dr\.?|Prof\.?|Attn:?|Attention:?|C/O|Re:|Dear|To:)\b",
+        re.IGNORECASE,
+    )
+    for i, line in enumerate(lines):
+        if not zip_pat.search(line):
+            continue
+        block = lines[max(0, i - 6):i + 1]
+        sidx = next(
+            (j for j, bl in enumerate(block) if street_pat.search(bl) or po_pat.search(bl)),
+            None,
+        )
+        if sidx is None or sidx == 0:
+            continue
+        for k in range(sidx - 1, -1, -1):
+            c = block[k].strip()
+            if not c or len(c) < 3:
+                continue
+            if skip_pfx.match(c):
+                continue
+            if any(sw in c.lower() for sw in skip_words):
+                continue
+            if re.match(r"^[\d\s\-/\.,]+$", c):
+                continue
+            return c
+    for pat in (r"(?:bill\s+to|billed\s+to|invoiced\s+to)\s*[:\n]\s*(.+)",
+                r"^To:\s*\n?\s*(.+)"):
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            v = m.group(1).strip()
+            if v and len(v) > 2:
+                return v
+    return text[:150]
+
+
+def _fetch_pdf_text(url: str) -> str:
+    with _pdf_cache_lock:
+        if url in _pdf_cache:
+            return _pdf_cache[url]
+    text = ""
+    try:
+        if _pdfplumber is None:
+            return ""
+        r = requests.get(url, timeout=25, allow_redirects=True, verify=False)
+        if r.status_code == 200 and "pdf" in r.headers.get("content-type", "").lower():
+            with _pdfplumber.open(io.BytesIO(r.content)) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        else:
+            log.warning("PDF fetch %s: HTTP %s", url[:60], r.status_code)
+    except Exception as e:
+        log.warning("PDF fetch error for %s: %s", url[:60], e)
+    with _pdf_cache_lock:
+        _pdf_cache[url] = text
+    return text
+
+
+# ── PRF helpers ───────────────────────────────────────────────────────────────
+
+def _is_prf(text: str) -> bool:
+    """True iff the PDF text contains 'PAYMENT REQUEST FORM' (whitespace-tolerant)."""
+    if not text:
+        return False
+    return bool(re.search(r"PAYMENT\s+REQUEST\s+FORM", text, re.IGNORECASE))
+
+
+def _looks_like_brand_example(raw: str) -> bool:
+    """Detect placeholder/example text in a PRF Brand field.
+
+    Forms like 'ex. STCC, AFP, STF, ST-' or 'STCC, AFP, STF' are template
+    examples in the form's left column, not filled values.
+
+    The comma-list condition requires every token to look like a short
+    uppercase abbreviation (optionally with a trailing dash) so legitimate
+    entity names like "yes, every kid, inc." are not flagged.
+    """
+    s = raw.strip()
+    if re.search(r"\bex\.?\s", s, re.IGNORECASE):
+        return True
+    if s.endswith("-"):
+        return True
+    if re.match(r"^[A-Z]{2,5}(,\s*[A-Z]{2,5})+$", s):
+        return True
+    if s.count(",") >= 2 and len(s) < 40:
+        tokens = [t.strip() for t in s.split(",") if t.strip()]
+        if tokens and all(re.match(r"^[A-Z]{1,6}-?$", t) for t in tokens):
+            return True
+    return False
+
+
+def _extract_vendor_from_invoice(text: str, sage_vendor: str):
+    """Smart vendor-name extraction from PDF text.
+
+    Returns (extracted_name | None, result_type) where result_type is one of:
+        'match', 'dba_match', 'prf_blank', 'no_text', 'mismatch'
+    """
+    if not text or len(text.strip()) < 30:
+        return None, "no_text"
+    t = text.strip()
+
+    # Payment Request Form — parse Vendor Name field
+    if re.search(r"PAYMENT\s+REQUEST\s+FORM", t, re.IGNORECASE):
+        m = re.search(r"Vendor\s+Name\s*:\s*?\n(.*?)(?:\n|$)", t, re.IGNORECASE)
+        if m:
+            cand = m.group(1).strip()
+            cand_alpha = re.sub(r"\W", "", cand)
+            is_blank = (
+                not cand_alpha
+                or cand_alpha.upper() in ("NEW", "EXISTING", "NEWEXISTING")
+                or len(cand_alpha) < 2
+            )
+            if is_blank:
+                return None, "prf_blank"
+            sage_norm = _normalize(sage_vendor)
+            cand_norm = _normalize(cand)
+            if sage_norm in cand_norm or cand_norm in sage_norm:
+                return cand, "match"
+            return cand, "mismatch"
+        return None, "prf_blank"
+
+    # DBA: SAGE vendor has "dba X" — find X anywhere in invoice
+    dba_m = re.search(r"\bdba\s+(.+)", sage_vendor, re.IGNORECASE)
+    if dba_m:
+        dba_name = dba_m.group(1).strip()
+        if _normalize(dba_name) in _normalize(t):
+            return dba_name, "dba_match"
+
+    # Full legal name (or pre-DBA portion) anywhere in invoice
+    sage_norm = _normalize(sage_vendor)
+    sage_no_dba = re.sub(r"\s+dba\s+.+", "", sage_vendor, flags=re.IGNORECASE).strip()
+    sage_no_dba_norm = _normalize(sage_no_dba)
+    if sage_norm in _normalize(t) or sage_no_dba_norm in _normalize(t):
+        return sage_vendor, "match"
+
+    # Remit-to / pay-to / make-checks-payable section
+    remit_m = re.search(
+        r"(?:remit\s+(?:payment\s+)?to|make\s+(?:checks?\s+)?(?:payable\s+)?to"
+        r"|pay\s+to(?:\s+the\s+order\s+of)?|please\s+remit(?:\s+check)?\s+to"
+        r"|send\s+(?:payment|check)\s+to)\s*:?\s*\n?\s*([^\n]+)",
+        t, re.IGNORECASE,
+    )
+    if remit_m:
+        rname = remit_m.group(1).strip()
+        if rname and len(rname) > 2:
+            rn = _normalize(rname)
+            if sage_norm in rn or sage_no_dba_norm in rn:
+                return rname, "match"
+            if dba_m and _normalize(dba_m.group(1).strip()) in rn:
+                return rname, "dba_match"
+
+    # Fuzzy word match (≥60% of vendor words ≥4 chars present in first 800 chars)
+    words = [w for w in sage_no_dba_norm.split() if len(w) > 3]
+    if words:
+        tn = _normalize(t[:800])
+        if sum(1 for w in words if w in tn) / len(words) >= 0.6:
+            return sage_vendor, "match"
+
+    return None, "mismatch"
+
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+
+def run_receipt_checks(invoices: list[dict[str, Any]]) -> None:
+    """Fetch PDFs and run all checks. Modifies invoices in-place."""
+    url_list = list({i["receipt_url"] for i in invoices if i.get("receipt_url")})
+    if not url_list:
+        log.info("No receipt URLs — skipping PDF checks.")
+        return
+
+    log.info("Fetching %d unique PDFs...", len(url_list))
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(_fetch_pdf_text, url): url for url in url_list}
+        done = 0
+        for future in as_completed(futures):
+            future.result()
+            done += 1
+            if done % 10 == 0:
+                log.info("  %d/%d PDFs processed...", done, len(url_list))
+
+    ok = sum(1 for v in _pdf_cache.values() if v)
+    log.info("Fetched %d/%d PDFs with text.", ok, len(url_list))
+
+    for inv in invoices:
+        url  = inv.get("receipt_url", "")
+        text = _pdf_cache.get(url, "")
+        inv["receipt_checked"] = bool(url)
+        inv["invoice_checked"] = bool(url) and bool(text)
+        inv.setdefault("receipt_flags", [])
+        inv.setdefault("invoice_flags", [])
+        if not text:
+            continue
+
+        method   = (inv.get("payment_method") or "").lower()
+        is_ach   = "ach" in method or "bank" in method
+        is_check = "check" in method
+
+        # Routing number
+        rm = re.search(
+            r"(?:routing\s*(?:number|#|no\.?)|aba\s*(?:number|#|routing)|routing/aba)\s*[:\s]*(\d{9})",
+            text, re.IGNORECASE,
+        )
+        if is_ach and rm and inv.get("ach_routing"):
+            sage_r = re.sub(r"\D", "", inv["ach_routing"])
+            if sage_r and sage_r != rm.group(1):
+                inv["receipt_flags"].append({
+                    "type": "routing_mismatch", "severity": "high",
+                    "label": "Routing # Mismatch",
+                    "detail": f"PDF: {rm.group(1)} | SAGE: {sage_r}",
+                })
+
+        # Account number
+        am = re.search(
+            r"(?:account\s*(?:number|#|no\.?)|acct\s*(?:number|#|no\.?))\s*[:\s]*(\d{6,17})",
+            text, re.IGNORECASE,
+        )
+        if is_ach and am and inv.get("ach_account"):
+            sage_a = re.sub(r"\D", "", inv["ach_account"])
+            pdf_a  = am.group(1)
+            if (sage_a and pdf_a and len(pdf_a) >= 8
+                    and pdf_a not in sage_a and sage_a not in pdf_a
+                    and sage_a[-6:] != pdf_a[-6:]):
+                inv["receipt_flags"].append({
+                    "type": "account_mismatch", "severity": "high",
+                    "label": "Account # Mismatch",
+                    "detail": f"PDF: {pdf_a} | SAGE: {sage_a}",
+                })
+
+        # ZIP check intentionally removed (per AP team request).
+
+        # Vendor name
+        extracted, vendor_result = _extract_vendor_from_invoice(text, inv.get("vendor", ""))
+        if vendor_result == "mismatch":
+            inv["invoice_flags"].append({
+                "type": "vendor_mismatch", "severity": "high",
+                "label": "Vendor Name Mismatch",
+                "detail": f"SAGE: {inv.get('vendor', '')} | PDF: {(extracted or text[:60]).strip()}",
+            })
+
+        # Amount — skipped for PRFs (image-based form; reimbursement totals don't match receipts)
+        if not _is_prf(text):
+            pdf_total  = _extract_total(text)
+            sage_total = float(inv.get("amount", 0) or 0)
+            if pdf_total and sage_total and abs(pdf_total - sage_total) > 0.02:
+                inv["invoice_flags"].append({
+                    "type": "amount_mismatch", "severity": "high",
+                    "label": "Amount Mismatch",
+                    "detail": f"PDF total: ${pdf_total:,.2f} | SAGE: ${sage_total:,.2f}",
+                })
+
+        # Bill-to entity
+        sage_entity = inv.get("org") or inv.get("entity", "")
+        if _is_prf(text):
+            brand_m = re.search(r"Brand\s*:\s*([^\n\(]+)", text, re.IGNORECASE)
+            if brand_m:
+                raw_brand = brand_m.group(1).strip()
+                if not _looks_like_brand_example(raw_brand) and len(raw_brand) >= 2:
+                    if not entities_match(sage_entity, raw_brand):
+                        inv["invoice_flags"].append({
+                            "type": "entity_mismatch", "severity": "medium",
+                            "label": "Bill-To Entity Mismatch",
+                            "detail": f"SAGE entity: {sage_entity} | PDF Brand field: {raw_brand}",
+                        })
+            # PRF with unreadable brand field — skip entity check
+        else:
+            billto_addr = _extract_billto(text)
+            found_name, found_canonical = (None, None)
+            if billto_addr and len(billto_addr.strip()) > 2:
+                found_name, found_canonical = find_entity_in_invoice(billto_addr)
+            if found_name is None:
+                found_name, found_canonical = find_entity_in_invoice(text)
+            if found_name is not None and not entities_match(sage_entity, found_canonical):
+                # Skip flag if SAGE entity itself appears anywhere in text
+                _, sage_in_text = find_entity_in_invoice(text)
+                if not (sage_in_text and entities_match(sage_entity, sage_in_text)):
+                    inv["invoice_flags"].append({
+                        "type": "entity_mismatch", "severity": "medium",
+                        "label": "Bill-To Entity Mismatch",
+                        "detail": f"SAGE entity: {sage_entity} | PDF: {found_name}",
+                    })
+
+    # Remove known false positives
+    for inv in invoices:
+        v = inv.get("vendor", "")
+        inv["invoice_flags"] = [
+            f for f in inv["invoice_flags"]
+            if not (f["type"] == "vendor_mismatch" and v in VENDOR_NAME_FP)
+            and not (f["type"] == "entity_mismatch" and v in ENTITY_FP_VENDORS)
+        ]
+
+    flagged = sum(1 for i in invoices if i["receipt_flags"] or i["invoice_flags"])
+    log.info("Receipt checks complete. %d invoices flagged.", flagged)
