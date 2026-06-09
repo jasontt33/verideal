@@ -1,0 +1,29 @@
+databases:
+  - name: ap_dashboard
+    env_var: AP_DASHBOARD_DB_URL
+    description: >
+      AP (Accounts Payable) invoice data from SAGE exports. Contains invoices,
+      hold lists, vendor payment history, and PDF receipt check results.
+      Key tables: invoices, holds, uploads, invoice_notes, attachments.
+
+  - name: pcard
+    env_var: PCARD_DB_URL
+    description: >
+      Purchase card (P-card) transaction data populated from spreadsheet uploads.
+      Tracks employee spending, flags policy violations such as prohibited vendor
+      categories (e.g. Uber Black), and stores suspicious transaction records.
+
+  - name: aging_report
+    env_var: AGING_REPORT_DB_URL
+    description: >
+      AP "Days Aging" snapshots from Concur exports. Every weekly xlsx upload
+      is preserved as a separate snapshot (uploads table); invoices are not
+      upserted — each upload has its own full set of rows. Key tables:
+      invoices (req_id, employee, supplier, total, days_aging, status,
+      bucket), uploads (snapshot_date, label), exclusions (rows skipped at
+      parse time), alert_actions (per-employee follow-up state, keyed by
+      email), notifications_sent (Email/Teams audit log), roster
+      (employee→company/dept/cost-center, bulk-replaced), vendor_notes,
+      invoice_issues. When querying invoices, you almost always want to
+      filter by upload_id (the snapshot) — typically the most recent.
+      Ignore uploads.file_bytes (raw xlsx).
