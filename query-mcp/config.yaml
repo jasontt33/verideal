@@ -23,7 +23,8 @@ databases:
       bucket), uploads (snapshot_date, label), exclusions (rows skipped at
       parse time), alert_actions (per-employee follow-up state, keyed by
       email), notifications_sent (Email/Teams audit log), roster
-      (employee→company/dept/cost-center, bulk-replaced), vendor_notes,
-      invoice_issues. When querying invoices, you almost always want to
+      (employee→company/dept/cost-center, bulk-replaced), roster_meta
+      (last roster upload metadata), vendor_notes, invoice_issues.
+      When querying invoices, you almost always want to
       filter by upload_id (the snapshot) — typically the most recent.
       Ignore uploads.file_bytes (raw xlsx).
