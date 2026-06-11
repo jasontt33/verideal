@@ -375,17 +375,21 @@ cd /Users/jay-t/stand-together/git/aging-report && docker compose down
 
 Note: do **not** use `-v` on aging-report's `down` unless you want to wipe local data. Leaving the volume preserves anything you uploaded for further testing.
 
-- [ ] **Step 7: Push both branches**
+- [ ] **Step 7: Push branches**
 
 ```bash
+# aging-report has its own git repo; push it
 cd /Users/jay-t/stand-together/git/aging-report
 git push
 
-cd /Users/jay-t/stand-together/git/query-mcp
-git push
+# query-mcp does NOT have its own git repo on the user's laptop — its files
+# live in the parent monorepo at /Users/jay-t/stand-together/git/.git on
+# branch amy-updates-port. Push there:
+cd /Users/jay-t/stand-together/git
+git push -u origin amy-updates-port
 ```
 
-If either repo's branch needs a PR per your team's flow, open it now; otherwise these can merge directly to whatever the project's default branch is. The spec covers the *what*; the *how to merge* follows whatever the existing process for these two repos is.
+If either repo's branch needs a PR per your team's flow, open it now. Note: the EC2 deploy mechanisms differ — aging-report on the EC2 is updated via `git pull`, query-mcp via `deploy.sh` from the laptop (see Task 4). So merging the query-mcp parent-monorepo branch is mainly about code review / history; it doesn't trigger any deploy.
 
 ---
 
@@ -462,12 +466,13 @@ sudo grep ^POSTGRES_PASSWORD .env
 
 Copy the value (everything after the `=`) — you'll paste it into the next step.
 
-- [ ] **Step 6: Pull the latest `query-mcp` commit and set `AGING_REPORT_DB_URL`**
+- [ ] **Step 6: Update `AGING_REPORT_DB_URL` in the EC2's query-mcp `.env`**
+
+Note: `query-mcp` does **not** deploy via `git pull` on the EC2 — it deploys via `deploy.sh` (tarball → S3 → SSM) from your laptop. The `.env` on the EC2 is hand-maintained.
 
 ```bash
+# Still SSHed to the EC2, in $MCP_DIR
 cd "$MCP_DIR"
-sudo git fetch --all
-sudo git pull --ff-only
 
 # Build the connection string with the password from step 5 and the port from step 2.
 # Replace <PASTE_PASSWORD> below.
@@ -482,14 +487,21 @@ sudo grep AGING_REPORT_DB_URL .env
 
 Expected: a line `AGING_REPORT_DB_URL=postgresql://aging:...@localhost:<port>/aging`.
 
-- [ ] **Step 7: Restart query-mcp and confirm it registers the new database**
+- [ ] **Step 7: From your laptop, run `deploy.sh` to ship the new code**
+
+`deploy.sh` builds a tarball from the local query-mcp directory, uploads to S3, and runs `docker compose up -d --build` via SSM. The `.env` you just updated on the EC2 is preserved (it's not in the tarball; see `deploy.sh` `--exclude='.env'`).
+
+Make sure your laptop's `query-mcp` working tree has the new commits (`30bcaba` or later — `git log --oneline -5` should show the aging-report changes).
 
 ```bash
-cd "$MCP_DIR"
-sudo docker compose up -d --build
-sleep 5
-sudo docker compose logs --tail=50 mcp | grep -E "Registered database|Starting ST Query MCP"
+# On your laptop (NOT on the EC2):
+cd /Users/jay-t/stand-together/git/query-mcp
+./deploy.sh
 ```
+
+The script tails SSM output. At the end it prints `=== LOGS ===` and `=== HEALTH ===`. Look for `Registered database: aging_report` in the LOGS section and `HTTP:` in the HEALTH section (any 2xx/3xx is fine; the MCP returns 4xx on unauthenticated requests, which is also OK).
+
+If LOGS shows `WARNING ... Env var AGING_REPORT_DB_URL not set — skipping database 'aging_report'`, the `.env` update from Step 6 didn't take effect. SSH back in and re-check `$MCP_DIR/.env` content, then re-run `./deploy.sh`.
 
 Expected: all three `Registered database:` lines, including `aging_report`, and a `Starting ST Query MCP ... databases=['ap_dashboard', 'pcard', 'aging_report']` line.
 
