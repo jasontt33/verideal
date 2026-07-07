@@ -24,6 +24,9 @@ databases:
       filter it by the active dataset_versions.id (dataset_version_id) — never
       sum violations across versions. Note: within a single batch a
       reference_no can legitimately span multiple rows (multi-line entries).
+      Gotcha: transactions.employee_id is zero-padded (e.g. '006011') but
+      roster_employees.employee_id is not ('6011') — join with
+      ltrim(transactions.employee_id, '0') = roster_employees.employee_id.
 
   - name: aging_report
     env_var: AGING_REPORT_DB_URL
