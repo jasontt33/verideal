@@ -33,7 +33,7 @@ body { font-family: 'Graphik', Arial, sans-serif; background: var(--st-nimbus); 
 .header-subtitle { color: rgba(255,255,255,0.7); font-size: 13px; font-weight: 300; margin-top: 2px; }
 .header-date { color: rgba(255,255,255,0.85); font-size: 13px; font-weight: 400; text-align: right; }
 
-.nav-bar { background: white; border-bottom: 2px solid var(--st-atmosphere); display: flex; align-items: center; padding: 0 20px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow-x: auto; }
+.nav-bar { background: white; border-bottom: 2px solid var(--st-atmosphere); display: flex; flex-wrap: wrap; align-items: center; padding: 0 24px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.06); row-gap: 4px; }
 .tab-btn { padding: 14px 14px; font-family: 'Graphik', Arial, sans-serif; font-size: 12.5px; font-weight: 500; color: var(--st-light-gray); border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; white-space: nowrap; letter-spacing: 0.2px; }
 .tab-btn:hover { color: var(--st-light-blue); }
 .tab-btn.active { color: var(--st-light-blue); border-bottom-color: var(--st-light-blue); font-weight: 600; }
@@ -1069,12 +1069,15 @@ function renderOver100k(){
     const tr = document.createElement('tr');
     tr.dataset.org  = inv.org;
     tr.dataset.bill = inv.bill;
+    const rcptCellOver = inv.receipt_url
+      ? `${rcptBadge} <a class="sp-link" href="${esc(inv.receipt_url)}" target="_blank" style="font-size:11px;padding:3px 9px;margin-left:4px;">📄 View Receipt PDF</a>`
+      : rcptBadge;
     tr.innerHTML=`<td class="org-name-cell">${esc(inv.entity)}</td><td>${esc(inv.vendor)}</td>
       <td><code style="font-size:12px;background:#f0f0f0;padding:2px 6px;border-radius:4px;">${esc(inv.bill)}</code></td>
       <td style="font-size:12px;">${esc(inv.reference)}</td>
       <td style="font-size:12px;">${fmtD(inv.invoice_date)}</td>
       <td class="amt-cell" style="color:var(--st-orange);">$${fmt(inv.amount)}</td>
-      <td>${rcptBadge}</td>
+      <td style="white-space:nowrap;">${rcptCellOver}</td>
       <td>${sp}</td>
       <td>${chips}<label class="att-btn-label" style="font-size:11px;padding:3px 9px;margin-top:4px;display:inline-flex;">+ Attach<input type="file" data-over-attach="ov${idx}"></label></td>
       <td><input type="text" value="${esc(note)}" placeholder="Add note…" data-over-note="ov${idx}" style="width:130px;border:1px solid #ddd;border-radius:4px;padding:4px 8px;font-size:12px;font-family:'Graphik',Arial,sans-serif;color:var(--st-dark-gray);"></td>`;
