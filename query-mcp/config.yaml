@@ -12,6 +12,18 @@ databases:
       Purchase card (P-card) transaction data populated from spreadsheet uploads.
       Tracks employee spending, flags policy violations such as prohibited vendor
       categories (e.g. Uber Black), and stores suspicious transaction records.
+      IMPORTANT — snapshot design, do NOT query raw tables unfiltered: every
+      upload is preserved as a full immutable batch (load_batches), so
+      transactions, flight_segments, uber_trips, meal_attendees and
+      outstanding_snapshots each contain one complete copy of the data per
+      batch_id. Unfiltered aggregates are inflated ~5-6x. Always resolve the
+      current batches first: SELECT transactions_batch_id, flights_batch_id,
+      uber_batch_id, meals_batch_id, roster_version_id FROM dataset_versions
+      WHERE is_active — then filter each table by that batch_id (roster_employees
+      by version_id). The violations table is precomputed per dataset version;
+      filter it by the active dataset_versions.id (dataset_version_id) — never
+      sum violations across versions. Note: within a single batch a
+      reference_no can legitimately span multiple rows (multi-line entries).
 
   - name: aging_report
     env_var: AGING_REPORT_DB_URL
