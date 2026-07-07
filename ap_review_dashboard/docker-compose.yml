@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ap_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ap_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ap_review}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ap_user} -d ${POSTGRES_DB:-ap_review}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-ap_user}:${POSTGRES_PASSWORD:-ap_password}@db:5432/${POSTGRES_DB:-ap_review}
+      UPLOAD_DIR: /data/uploads
+      ATTACHMENT_DIR: /data/attachments
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      AZURE_APP_ID: ${AZURE_APP_ID:-}
+      SP_SEARCH_FOLDER:      ${SP_SEARCH_FOLDER:-AP/Daily Payment Approvals}
+      SP_MIN_BILL_LENGTH:    ${SP_MIN_BILL_LENGTH:-4}
+      SP_BILL_TIER_ENABLED:  ${SP_BILL_TIER_ENABLED:-true}
+      SP_SEARCH_CONCURRENCY: ${SP_SEARCH_CONCURRENCY:-8}
+    volumes:
+      - uploads:/data/uploads
+      - attachments:/data/attachments
+      - ./frontend:/app/frontend:ro
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+
+volumes:
+  pgdata:
+  uploads:
+  attachments:
